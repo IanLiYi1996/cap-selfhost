@@ -1,0 +1,25 @@
+[project]
+name = "cap-whisper-server"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+	"faster-whisper>=1.1.0",
+	"boto3>=1.35.0",
+	"opencc-python-reimplemented>=0.1.7",
+	"sherpa-onnx>=1.13.6",
+	# Declared explicitly even though sherpa-onnx pulls it in: uv does not record
+	# it in the lockfile, and `uv export` then emits a hash-mode requirements file
+	# that pip rejects for the one unhashed package. Works locally, fails on a
+	# clean install.
+	"sherpa-onnx-core>=1.13.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
