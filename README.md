@@ -1,229 +1,108 @@
-> ## 关于这个仓库
+# Cap Self-Hosted on AWS
+
+> 把开源录屏工具 [Cap](https://github.com/CapSoftware/Cap)(Loom 的开源替代)完整部署到**你自己的 AWS 账号**,
+> 并加上 Amazon Transcribe 转写、Claude 总结和**基于视频内容的问答**。
 >
-> 这是 [CapSoftware/Cap](https://github.com/CapSoftware/Cap) 的一个**自建部署分支**：把 Cap Web 部署到你自己的 AWS 账号（CDK），并在此基础上加了 Amazon Transcribe 转写、Bedrock 上的 Claude 总结与基于视频内容的问答、实例级"必须登录才能观看"等改动。上游 README 原文保留在下方。
->
-> **部署到你自己的 AWS 账号：见 [`infra-aws/DEPLOY.md`](infra-aws/DEPLOY.md)**，一条命令 `./infra-aws/scripts/deploy.sh --admin-email you@example.com`。
->
-> 本仓库基于上游提交 `5bc15a52b`（2026-11-23）。与上游的全部差异集中在 `infra-aws/`、`apps/whisper-server/`、`apps/web/lib/video-qa/`、`apps/web/lib/aws-transcribe.ts` 等目录，以及 [`design/notes/aws-deployment-runbook.md`](design/notes/aws-deployment-runbook.md) 里列出的若干处上游文件改动。
->
-> 许可证沿用上游：主体为 AGPLv3（见 [`LICENSE`](LICENSE)）。
->
-> ### 自建部署要点
->
-> Cap 的对象存储访问全部走预签名 URL（`packages/web-backend/src/S3Buckets/S3BucketAccess.ts`），并内置 CloudFront 签名 URL 支持（`packages/web-backend/src/S3Buckets/index.ts`），因此 **S3 桶可以 `BLOCK_ALL` 公开访问，无需任何公开策略**。`CAP_AWS_ACCESS_KEY` / `CAP_AWS_SECRET_KEY` 留空时会 fallback 到 `fromContainerMetadata()`（`packages/web-backend/src/Aws.ts`），即 ECS Task Role——不需要长期密钥。
->
-> 自建实例上 `userIsPro()` 恒为 `true`（`packages/utils/src/constants/plans.ts`，因为 `NEXT_PUBLIC_IS_CAP` 未设置），所以自定义 S3 等 Pro 功能默认可用。桌面端通过 `Settings > Cap Server URL` 或构建期的 `VITE_SERVER_URL` 指向我们的实例。
->
-> ### GitHub Actions
->
-> 本仓库已**禁用 Actions**。上游的 `ci.yml` 会在 push 到 main 时触发 macOS/Windows runner 矩阵（私有仓计费，macOS 10 倍），`publish-nightly.yml` 还有每日 cron 会尝试用不存在的 secrets 发布。要启用请先裁剪 `.github/workflows/`。
->
-> ### 许可
->
-> 上游为 **AGPLv3**（`cap-camera*` / `scap-*` crate 为 MIT）。私有开发与内部使用没有问题；一旦对外提供网络服务，需向使用者提供包含我们修改的源码。
+> *A self-hosting branch of [CapSoftware/Cap](https://github.com/CapSoftware/Cap): one-command CDK deploy to your
+> own AWS account, Amazon Transcribe captions, and Claude on Amazon Bedrock for summaries and video Q&A.*
 
-<p align="center">
-	<img width="150" height="150" src="https://github.com/CapSoftware/Cap/blob/main/apps/desktop-gpui/icons/Square310x310Logo.png" alt="Cap logo">
-</p>
+录屏上传、播放、分享、评论这些功能沿用上游 Cap;这个分支解决的是**自建部署**和**录制之后的理解**:
+一段一小时的会议录完,几分钟内就有带说话人和标点的字幕、AI 总结和章节,还可以直接问"这次会议定了什么"、
+"演示里设置页上有哪些选项",回答里的时间戳点一下就跳到视频对应位置。
 
-<h1 align="center">Cap</h1>
+## 功能
 
-<p align="center">
-	Beautiful, shareable screen recordings. Open source, fast, and built for teams that want to own their data.
-</p>
+| | 说明 |
+|---|---|
+| **一条命令部署** | `./infra-aws/scripts/deploy.sh` 从空账号部署到可用实例,之后每次更新也是同一条命令,见 [`infra-aws/DEPLOY.md`](infra-aws/DEPLOY.md) |
+| **Amazon Transcribe 转写** | 中英自动识别、说话人识别、完整标点;1 小时 45 分钟的录制约 9 分钟出字幕。自建 Whisper 作回退 |
+| **Claude 总结与章节** | Amazon Bedrock 上的 Claude Sonnet 5.5 生成标题、总结和章节 |
+| **视频问答(Ask 标签页)** | Claude Opus 5.5 基于**完整字幕 + 画面时间线**回答,每个结论带可点击的 `[mm:ss]`;需要看清画面细节时自己调用 `look_at` 查看关键帧 |
+| **画面时间线** | 按画面变化抽关键帧,Sonnet 5.5 逐段描述画面并**原样照抄屏幕文字**(幻灯片、代码、报错、界面数值),让问答也能回答"屏幕上显示了什么" |
+| **必须登录才能观看** | 整个实例只对登录用户开放,包括设成"公开"的视频;链接预览、oEmbed、公开合集也一并关闭 |
+| **Cognito 登录** | 管理员建号,通过 OIDC 登录;支持上游新增的 Passkey |
 
-<p align="center">
-	<a href="https://cap.so">Website</a>
-	 |
-	<a href="https://cap.so/download">Download</a>
-	 |
-	<a href="https://cap.so/docs">Docs</a>
-	 |
-	<a href="https://cap.so/pricing">Pricing</a>
-	 |
-	<a href="https://cap.link/discord">Discord</a>
-</p>
+## 架构
 
-<p align="center">
-	<a href="https://console.algora.io/org/CapSoftware/bounties?status=open">
-		<img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fconsole.algora.io%2Fapi%2Fshields%2FCapSoftware%2Fbounties%3Fstatus%3Dopen" alt="Open bounties">
-	</a>
-</p>
+![Cap self-hosted on AWS architecture](design/architecture/aws-architecture.svg)
 
-<img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png" alt="Cap app preview">
+要点:
 
-Cap is the open source alternative to Loom. It gives you fast screen recording, polished local editing, instant share links, comments, transcripts, analytics, team workspaces, custom domains, custom S3 storage, and full self-hosting when you need complete control.
+- **VPC 里没有任何对公网开放的入口。** 站点走 CloudFront → **VPC origin** → 内部 ALB;公有子网里只有一个 NAT 网关。
+- **录像桶是私有的。** 播放和下载用 CloudFront **签名 URL**(1 小时有效),CloudFront 通过 Origin Access Control 读桶;
+  ECS 任务经 S3 网关端点访问,不走 NAT。
+- **常驻的只有两个 Fargate 服务**:`cap-web`(Next.js)和 `media-server`,通过 ECS Service Connect 互访。
+  Whisper 是**按需启动**的一次性 Fargate 任务,只在抽关键帧(或回退转写)时运行。
+- **数据库**是 Aurora Serverless v2(MySQL,0.5–4 ACU);所有密钥在 Secrets Manager,镜像在 ECR,日志在 CloudWatch。
+- 架构图是 draw.io 可编辑的 SVG:直接拖进 [diagrams.net](https://app.diagrams.net) 就能改。
 
-Use Cap for product demos, bug reports, onboarding, tutorials, design reviews, engineering walkthroughs, async standups, client updates, and any moment where showing the work is faster than scheduling another call.
+### 从录制到问答
 
-## Why Cap
-
-- **Record, edit, share.** Capture your screen, camera, and microphone, then share a link or export a finished video.
-- **Instant Mode for speed.** Upload while recording and get a shareable link the moment you stop.
-- **Studio Mode for polish.** Record locally, edit with backgrounds, zooms, trimming, captions, and export controls.
-- **A native desktop app.** Cap runs on macOS, Windows, and Linux, with a web dashboard for viewing, sharing, and managing recordings.
-- **Own your storage.** Use Cap Cloud, connect your own S3-compatible bucket, keep recordings local, or self-host the full platform.
-- **Privacy by default.** Share publicly or privately, add passwords, use your own domain, or keep sensitive recordings off hosted infrastructure.
-- **Async collaboration.** Comments, reactions, transcripts, viewer analytics, and team workspaces keep feedback attached to the video.
-- **Cap AI.** Generate titles, summaries, clickable chapters, captions, and transcripts automatically.
-- **Move from Loom.** Import existing Loom videos into Cap and keep your library in one place.
-
-## Recording Modes
-
-| Mode | Best for | How it works |
-| --- | --- | --- |
-| Instant Mode | Fast feedback, bug reports, async updates | Cap uploads while you record, then gives you a share link as soon as recording stops. |
-| Studio Mode | Product demos, tutorials, launches, client work | Cap records locally, opens the editor, and lets you export or share a polished video. |
-
-## Data Ownership
-
-Cap is designed for people and teams who do not want their recording workflow locked inside a black box.
-
-- Use Cap Cloud for the fastest hosted experience.
-- Connect AWS S3, Cloudflare R2, Backblaze B2, MinIO, Wasabi, or another S3-compatible provider.
-- Serve share pages from your own domain.
-- Self-host Cap Web, the API, database, media server, and object storage with Docker Compose.
-- Point Cap Desktop at your self-hosted instance from `Settings > Cap Server URL`.
-
-## Get Started
-
-For most users, the fastest path is:
-
-1. Download Cap for macOS, Windows, or Linux from [cap.so/download](https://cap.so/download).
-2. Sign in or create an account.
-3. Choose Instant Mode or Studio Mode.
-4. Record your first Cap.
-5. Share the link, export the file, or keep it local.
-
-The full product docs live at [cap.so/docs](https://cap.so/docs).
-
-## Self-Hosting
-
-The fastest way to self-host Cap Web is Docker Compose:
-
-```bash
-git clone https://github.com/CapSoftware/Cap.git
-cd Cap
-docker compose up -d
+```mermaid
+flowchart LR
+    A["录制上传<br/>桌面端 · 浏览器 · Chrome 插件"] --> B["media-server<br/>转码 · 生成播放源"]
+    B --> C["Amazon Transcribe<br/>字幕 · 说话人 · 标点"]
+    C --> D["Claude Sonnet 5.5<br/>标题 · 总结 · 章节"]
+    C --> E["Whisper 任务抽关键帧<br/>Sonnet 5.5 生成画面时间线"]
+    D --> F["Ask 标签页<br/>Claude Opus 5.5 问答"]
+    E --> F
+    F -. "look_at" .-> E
 ```
 
-Cap will be available at `http://localhost:3000`.
+问答时,整份带时间戳的字幕、画面时间线、总结和章节作为一个**带缓存点**的上下文交给模型,追问只按缓存读计费
+(约为首次的十分之一)。画面时间线在转写流程开启 AI 生成时随之生成,否则(以及更早的视频)在第一次被提问时自动补上,
+补上之前的回答只基于字幕。
 
-Login links appear in the service logs when email is not configured:
+## 快速开始
 
-```bash
-docker compose logs cap-web
-```
-
-### Deployment Options
-
-| Method | Best for |
-| --- | --- |
-| Docker Compose | VPS, home servers, and any Docker-capable host |
-| [Railway](https://railway.com/new/template/PwpGcf) | One-click managed hosting |
-| Coolify | Self-hosted PaaS deployments with `docker-compose.coolify.yml` |
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
-
-For production, configure public URLs and replace the default secrets before exposing the deployment to the internet:
+前提:一个 AWS 账号(区域 **us-east-1**)、在 Bedrock 里开通 Claude Sonnet 5.5 和 Opus 5.5、
+一台装了 Docker / Node 24 / Bun / AWS CLI 的构建机。
 
 ```bash
-CAP_URL=https://cap.yourdomain.com
-S3_PUBLIC_URL=https://s3.yourdomain.com
+git clone https://github.com/IanLiYi1996/cap-selfhost.git && cd cap-selfhost
+./infra-aws/scripts/deploy.sh --admin-email you@example.com
 ```
 
-See the [self-hosting guide](https://cap.so/docs/self-hosting) for email setup, AI providers, SSL, storage, production hardening, and troubleshooting.
+首次约 1 小时,完成后打印站点地址和管理员密码。加 `--plan` 可以只看会做什么、不做改动。
+完整步骤、添加用户、客户端设置、日常更新和常见问题见 **[`infra-aws/DEPLOY.md`](infra-aws/DEPLOY.md)**。
 
-For single-owner instances behind an authenticating reverse proxy, see
-[trusted-proxy authentication](docs/trusted-proxy-auth.md) for the required shared
-secret, proxy hardening, and how to trigger sign-in without a built-in login button.
+## 费用
 
-## Local Development
+粗略估算,以账单为准:
 
-Cap is a Turborepo monorepo. The desktop app is native Rust with a [GPUI](https://www.gpui.rs/) interface, the web app is Next.js with Drizzle and MySQL, and recording, rendering, and export live in shared Rust crates.
+- **固定约 $200/月起**:NAT 网关、Aurora Serverless v2 最小容量、两个常驻 Fargate 服务、内部 ALB,
+  外加少量 CloudFront / S3 / Secrets Manager。
+- **按用量**:Amazon Transcribe 约 $1.44/小时音频;画面时间线 1 小时录制约 $0.1–0.3;
+  问答首问约 $0.2、追问约 $0.01(按 Anthropic 官方价估算,Bedrock 单独计价)。
 
-Requirements:
+## 目前不支持
 
-- Node.js 24 or newer
-- Bun 1.4.4
-- Rust via [rustup](https://rustup.rs). The workspace pins 1.88; the desktop app pins its own toolchain, which rustup installs on first build.
-- Docker for MySQL, MinIO, and local services
+- **邮件不发送**:没有配置发信服务,邮箱验证码登录、评论通知、邀请邮件都不可用。
+- **iOS App**:商店版的服务器地址写死为 cap.so,手机上直接用浏览器打开分享页。
+- **实时字幕**(边录边出):依赖 AssemblyAI 的流式接口,本分支只做录制后的批量转写。
+- **用户自配的 S3 桶**:可以存视频,但不会转写,也没有画面时间线。
+- **中英混说时的英文术语**:Transcribe 对 Agent、GraphRAG 这类英文词识别偏弱(纯中文术语反而比 Whisper 准)。
 
-Install and set up the repo:
+## 和上游的差异
 
-```bash
-bun install
-bun run env-setup
-bun run cap-setup
-```
+本仓库基于上游提交 `5bc15a52b`(2026-11-23)。新增的部分集中在这些目录:
 
-Common commands:
+| 路径 | 内容 |
+|---|---|
+| `infra-aws/` | CDK 栈(网络、存储、数据库、计算、前门、Cognito、Whisper)、`deploy.sh`、`DEPLOY.md` |
+| `apps/whisper-server/` | 按需运行的 Whisper 任务:回退转写、说话人识别、繁转简、抽关键帧 |
+| `apps/web/lib/aws-transcribe.ts` | Amazon Transcribe 转写后端 |
+| `apps/web/lib/video-qa/` · `apps/web/workflows/visual-timeline.ts` | 视频问答与画面时间线 |
+| `apps/web/app/api/videos/[videoId]/ask/` · `apps/web/app/s/[videoId]/_components/tabs/Ask.tsx` | 问答接口和 Ask 标签页 |
+| `apps/web/lib/sign-in-required.ts` | 实例级"必须登录才能观看" |
 
-| Command | Purpose |
-| --- | --- |
-| `bun run dev` | Start the full local development stack |
-| `bun run dev:web` | Start the web app without the desktop app |
-| `bun run dev:desktop` | Build and run the desktop app, rebuilding on save on macOS |
-| `bun run build` | Build the workspace |
-| `bun run gpui:build <target>` | Build and package a desktop release for a Rust target triple |
-| `bun run lint` | Run Biome linting |
-| `bun run format` | Format with Biome |
-| `bun run typecheck` | Run TypeScript project references |
-| `cargo test -p <crate>` | Run Rust tests for a crate |
+对上游文件的改动(转写门控、权限策略、限流、OG 图等),以及每次合并上游新版本后必须检查的地方,
+都记录在 [`design/notes/aws-deployment-runbook.md`](design/notes/aws-deployment-runbook.md) 的「同步上游」一节。
+设计文档在 [`design/superpowers/specs/`](design/superpowers/specs/)。
 
-Database commands:
+上游 Cap 本身的介绍、桌面端和本地开发说明,见上游的 [README](https://github.com/CapSoftware/Cap#readme)。
 
-| Command | Purpose |
-| --- | --- |
-| `bun run db:generate` | Generate database artifacts |
-| `bun run db:push` | Push schema changes |
-| `bun run db:studio` | Open Drizzle Studio |
+## 许可证
 
-## Repository Map
-
-| Path | What lives there |
-| --- | --- |
-| `apps/desktop-gpui` | The Cap desktop app: native Rust and GPUI for macOS, Windows, and Linux |
-| `apps/web` | Next.js web app for marketing, docs, dashboard, sharing, API routes, and auth |
-| `apps/cli` | Rust CLI |
-| `apps/media-server` | Media processing service used by the web app |
-| `apps/discord-bot` | Discord integration |
-| `packages/database` | Drizzle schema and database access |
-| `packages/ui` | Shared React UI |
-| `packages/web-backend` | Backend service layer |
-| `packages/web-domain` | Web domain models and types |
-| `packages/env` | Environment validation |
-| `packages/sdk-embed` | Embed SDK |
-| `packages/sdk-recorder` | Recorder SDK |
-| `crates/*` | Recording, capture, camera, audio, encoding, rendering, muxing, export, and test crates |
-| `scripts/*` | Setup, analytics, build, and maintenance tooling |
-| `infra/*` | Infrastructure configuration |
-
-The web API uses Effect and `@effect/platform` HTTP APIs. Desktop capture and export paths are backed by Rust crates for fast recording, rendering, and platform-specific media access.
-
-## Analytics
-
-Cap uses [Tinybird](https://www.tinybird.co) for viewer telemetry dashboards. Set `TINYBIRD_ADMIN_TOKEN` or `TINYBIRD_TOKEN` before running analytics commands.
-
-| Command | Purpose |
-| --- | --- |
-| `bun run analytics:setup` | Deploy Tinybird datasources and pipes from `scripts/analytics/tinybird` |
-| `bun run analytics:check` | Validate that the Tinybird workspace matches the app expectations |
-
-`analytics:setup` can remove Tinybird resources outside the checked-in analytics configuration. Use it only against the workspace you intend to manage from this repo.
-
-## Contributing
-
-Cap is built in public. Issues, pull requests, design feedback, bug reports, docs fixes, and bounties are welcome.
-
-- Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
-- Join the community on [Discord](https://cap.link/discord).
-- Check open bounties on [Algora](https://console.algora.io/org/CapSoftware/bounties?status=open).
-
-## License
-
-Portions of this software are licensed as follows:
-
-- Code in the `cap-camera*` and `scap-*` crate families is licensed under the MIT License. See [licenses/LICENSE-MIT](https://github.com/CapSoftware/Cap/blob/main/licenses/LICENSE-MIT).
-- Third-party components are licensed under the original license provided by their owner.
-- All other content not mentioned above is available under the AGPLv3 license as defined in [LICENSE](https://github.com/CapSoftware/Cap/blob/main/LICENSE).
+沿用上游:除 `cap-camera*` 和 `scap-*` 系列 crate 为 MIT 外,其余代码均为 **AGPLv3**,见 [`LICENSE`](LICENSE)。
+如果把部署出来的实例提供给组织以外的人使用,需要向他们提供修改后的源代码。
