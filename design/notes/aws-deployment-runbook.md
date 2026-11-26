@@ -330,6 +330,14 @@ Studio 模式和上传的视频没有实时字幕,只有录完后的批量转写
 
 ## 已知的坑
 
+**Service Connect 只认 deployment 创建时已存在的端点。** cap-web 调 media-server(`media-server:3456`),
+media-server 回调 cap-web(`cap-web:3000`,处理进度和实时字幕的 webhook),两个方向都走 Service Connect。
+一个 deployment 创建时命名空间里还没有的端点,它的任务永远解析不到——所以服务**同时新建**时总有一个方向不通,
+而且不会自愈。CDK 让 cap-web 在 media-server 之后创建(保证 web → media),`deploy.sh` 首次部署结束时
+再把两个服务各滚一次(保证反方向)。症状:桌面端录制全部 "Processing failed"(cap-web 日志
+`Preverification skipped … fetch failed`),或 media-server 回调失败。处理:对受影响的服务
+`aws ecs update-service --force-new-deployment`。新增服务间调用时也要记得这一点。
+
 **Aurora 的 TLS 必须用 `?ssl=Amazon%20RDS`。** 写 `?ssl={"rejectUnauthorized":true}`
 会失败并报 `unable to get local issuer certificate` / `HANDSHAKE_SSL_ERROR`——Aurora 的
 证书由 Amazon RDS CA 签发，那个 CA 不在容器的信任库里。mysql2 内置了该 CA，用
