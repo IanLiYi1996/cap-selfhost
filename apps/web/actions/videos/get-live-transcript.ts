@@ -11,14 +11,23 @@ import {
 	type LiveTranscriptState,
 	parseLiveTranscript,
 } from "@/lib/live-transcribe-core";
+import {
+	isLiveTranslationEnabled,
+	translateLiveTranscript,
+} from "@/lib/live-translate-store";
 import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { isLanguageCode } from "./translation-languages";
 
 export type GetLiveTranscriptResult = {
 	success: boolean;
 	message: string;
 	content?: string;
+	/** `content` in the requested language, cue for cue, when live
+	 * translation is enabled. */
+	translatedContent?: string;
+	canTranslate?: boolean;
 	state?: LiveTranscriptState;
 	updatedAt?: string;
 	/** Nothing will ever become available for this caller — stop polling. */
@@ -32,6 +41,7 @@ export type GetLiveTranscriptResult = {
  */
 export async function getLiveTranscript(
 	videoId: Video.VideoId,
+	targetLanguage?: string,
 ): Promise<GetLiveTranscriptResult> {
 	if (!videoId) {
 		return { success: false, message: "Missing video id" };
@@ -72,15 +82,12 @@ export async function getLiveTranscript(
 	}
 
 	try {
-		const content = await Effect.gen(function* () {
-			const [bucket] = yield* Storage.getAccessForVideo(
-				decodeStorageVideo(video),
-			);
-
-			return yield* bucket.getObject(
-				getLiveTranscriptObjectKey(video.ownerId, videoId),
-			);
-		}).pipe(runPromise);
+		const [bucket] = await Storage.getAccessForVideo(
+			decodeStorageVideo(video),
+		).pipe(runPromise);
+		const content = await bucket
+			.getObject(getLiveTranscriptObjectKey(video.ownerId, videoId))
+			.pipe(runPromise);
 
 		if (Option.isNone(content)) {
 			return { success: false, message: "Live transcript not available" };
@@ -91,10 +98,23 @@ export async function getLiveTranscript(
 			return { success: false, message: "Live transcript not available" };
 		}
 
+		const translated =
+			targetLanguage && isLanguageCode(targetLanguage)
+				? await translateLiveTranscript({
+						bucket,
+						ownerId: video.ownerId,
+						videoId,
+						artifact,
+						language: targetLanguage,
+					})
+				: null;
+
 		return {
 			success: true,
 			message: "Live transcript retrieved successfully",
 			content: artifact.vtt,
+			canTranslate: isLiveTranslationEnabled(),
+			...(translated ? { translatedContent: translated } : {}),
 			state: artifact.state,
 			updatedAt: artifact.updatedAt,
 		};

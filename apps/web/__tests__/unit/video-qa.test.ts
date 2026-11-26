@@ -317,3 +317,45 @@ describe("parseAskRequest", () => {
 		expect(parsed.history.at(-1)?.content).toBe("turn 29");
 	});
 });
+
+describe("buildVideoQaContext with materials", () => {
+	it("adds each uploaded material by name after the recording", () => {
+		const context = buildVideoQaContext({
+			title: "周会",
+			durationSeconds: 60,
+			cues: [{ start: 1, end: 2, text: "看一下附件" }],
+			timeline: null,
+			materials: [
+				{ name: "派单规则.pdf", text: "[Page 1]\n优先派给最近的工程师" },
+				{ name: "原型.html", text: "设置\n效率优先" },
+			],
+		});
+		expect(context).toContain(
+			'<materials>\n<material name="派单规则.pdf">\n[Page 1]\n优先派给最近的工程师\n</material>\n<material name="原型.html">\n设置\n效率优先\n</material>\n</materials>',
+		);
+		expect(context.indexOf("<transcript>")).toBeLessThan(
+			context.indexOf("<materials>"),
+		);
+	});
+
+	it("says when no materials were uploaded", () => {
+		const context = buildVideoQaContext({
+			title: "x",
+			durationSeconds: 1,
+			cues: [],
+			timeline: null,
+		});
+		expect(context).toContain("<materials>\n(none uploaded)\n</materials>");
+	});
+
+	it("keeps a material name from closing its tag early", () => {
+		const context = buildVideoQaContext({
+			title: "x",
+			durationSeconds: 1,
+			cues: [],
+			timeline: null,
+			materials: [{ name: 'a">b.md', text: "t" }],
+		});
+		expect(context).toContain('<material name="a&quot;>b.md">');
+	});
+});

@@ -298,6 +298,18 @@ function createServerEnv() {
 				.describe(
 					"Comma-separated Amazon Transcribe language codes to identify between, eg. zh-CN,en-US",
 				),
+			LIVE_TRANSLATE_BACKEND: z
+				.enum(["aws-translate"])
+				.optional()
+				.describe(
+					"'aws-translate' lets viewers read live captions in another language, translated with Amazon Translate",
+				),
+			LIVE_TRANSCRIBE_ASR: z
+				.enum(["assemblyai", "aws-transcribe"])
+				.optional()
+				.describe(
+					"'aws-transcribe' runs instant-mode live transcription through Amazon Transcribe Streaming on the media server (needs LIVE_TRANSCRIBE_RUNNER=media-server); otherwise AssemblyAI",
+				),
 			/// Whisper transcription (self-hosted, run as an on-demand ECS task)
 			WHISPER_CLUSTER_ARN: z.string().optional(),
 			WHISPER_TASK_DEFINITION_ARN: z.string().optional(),

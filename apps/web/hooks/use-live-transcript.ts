@@ -7,6 +7,9 @@ export type LiveTranscriptData =
 	| {
 			kind: "ready";
 			content: string;
+			/** `content` in the requested language, cue for cue. */
+			translatedContent?: string;
+			canTranslate: boolean;
 			state: LiveTranscriptState;
 			updatedAt?: string;
 	  }
@@ -19,7 +22,7 @@ export type LiveTranscriptData =
  * stop; poll fast so the transcript appears the moment the tail chunk lands. */
 const PENDING_POLL_INTERVAL = 2000;
 /** Live transcription is still appending; poll often enough to feel live. */
-const ACTIVE_POLL_INTERVAL = 5000;
+const ACTIVE_POLL_INTERVAL = 2500;
 /** Live transcription finished; the canonical transcript supersedes it
  * shortly, so only poll slowly for content written between renders. */
 const SETTLED_POLL_INTERVAL = 15000;
@@ -30,11 +33,15 @@ const SETTLED_POLL_INTERVAL = 15000;
  * recording with live transcription started and no canonical transcript yet —
  * when it is false nothing is ever fetched.
  */
-export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
+export const useLiveTranscript = (
+	videoId: Video.VideoId,
+	enabled: boolean,
+	language: string | null = null,
+) => {
 	return useQuery({
-		queryKey: ["liveTranscript", videoId],
+		queryKey: ["liveTranscript", videoId, language],
 		queryFn: async (): Promise<LiveTranscriptData> => {
-			const result = await getLiveTranscript(videoId);
+			const result = await getLiveTranscript(videoId, language ?? undefined);
 
 			if (result.stop) return { kind: "stopped" };
 			if (!result.success || !result.content) return { kind: "pending" };
@@ -42,6 +49,8 @@ export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
 			return {
 				kind: "ready",
 				content: result.content,
+				translatedContent: result.translatedContent,
+				canTranslate: result.canTranslate ?? false,
 				state: result.state ?? "active",
 				updatedAt: result.updatedAt,
 			};
@@ -62,5 +71,6 @@ export const useLiveTranscript = (videoId: Video.VideoId, enabled: boolean) => {
 		gcTime: 5 * 60 * 1000,
 		refetchOnWindowFocus: false,
 		retry: false,
+		placeholderData: (previous) => previous,
 	});
 };

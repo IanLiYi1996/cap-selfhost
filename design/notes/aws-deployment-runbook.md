@@ -285,6 +285,49 @@ Whisper 日志组里 `wrote N frames (K keyframes)`。
 **限制:** 用户自配 S3 桶的视频没有画面时间线(Whisper 任务角色只能访问本桶),只有基于字幕的回答;
 截图类视频没有 Ask;上下文上限约 70 万字符,超过返回 413。
 
+### 会议材料与问答历史
+
+Ask 标签页顶部的 "Meeting materials":视频所有者和**视频所属组织的成员**可以上传/删除,能看视频的人都能
+下载,问答时材料全文和字幕、画面时间线一起放进缓存块。代码在 `apps/web/lib/video-materials/`、
+`app/api/videos/[videoId]/materials/`。
+
+- 格式:PDF(`unpdf`,只有文字层,扫描件会被拒)、docx、pptx、xlsx(JSZip 直接读 XML)、html/htm、
+  md、txt、csv、tsv、json。老的 .doc/.ppt 不支持。单个 25 MB,每个视频 20 个、提取后总计 30 万字符。
+- S3:`<owner>/<video>/materials.v1.json`(清单,S3 条件写防并发)、`materials/<id>/<文件名>`(原件)、
+  `materials/<id>/text.txt`(提取文本)。下载一律走 `attachment` 签名 URL——上传的 HTML 绝不能在本域渲染。
+- 问答历史按"视频 × 用户"存在 `<owner>/<video>/ask-history/<userId>.v1.json`,最多 60 条;
+  每答完一次追加,打开 Ask 时载入,"Clear conversation" 删除。别人看不到你的对话。
+
+## 实时字幕与翻译(Instant 模式录制)
+
+**只对桌面端 Instant 模式的录制生效**(`desktopSegments` 源,录制中每 ~3 秒传一个音频分片)。
+Studio 模式和上传的视频没有实时字幕,只有录完后的批量转写。
+
+- **转写:** media-server 为每个录制开一路 Amazon Transcribe Streaming(`apps/media-server/src/lib/live-transcribe-stream.ts`)。
+  分片按到达顺序灌进一个常驻 ffmpeg 解码成 16 kHz PCM;开启 partial results stabilization,
+  Transcribe 标为 stable 的词一落到"已完整听完的分片"里就通过原有 webhook
+  (`/api/webhooks/media-server/live-transcribe`)上报,web 写 `transcription.live.json`。
+  实测:分片上传后约 4 秒出字,加上桌面端分片上传与页面 2.5 秒轮询,说话到看到字幕约 6–10 秒。
+  语言在 `TRANSCRIBE_LANGUAGE_OPTIONS` 里自动识别(最多 5 种)。
+- **翻译:** 分享页 Transcript 标签的实时字幕标题栏有语言下拉框,选了之后每条字幕下面显示译文,播放器字幕也切成译文。
+  每条字幕用 Amazon Translate 只翻一次,按原文 hash 缓存在 `<owner>/<video>/transcription.live.<lang>.json`;
+  同一进程内多名观众共享同一轮翻译。每次轮询最多翻 30 条新字幕,其余先显示原文。
+- **录完以后:** 实时字幕**不会**直接升级成正式字幕(流式结果没有说话人,准确度也不如批量)。
+  `promoteLiveTranscript` 直接排一次批量 Transcribe;批量完成前页面继续显示实时字幕,之后无缝换成正式字幕,
+  之前选的语言会对正式字幕再请求一次翻译(走原有的 LLM 翻译)。
+- **开关(CDK 给 cap-web 设的):** `LIVE_TRANSCRIBE_RUNNER=media-server`、`LIVE_TRANSCRIBE_ASR=aws-transcribe`、
+  `LIVE_TRANSLATE_BACKEND=aws-translate`。去掉后两个就回到上游行为(没有 `ASSEMBLY_API_KEY` 时即无实时字幕)。
+  IAM:任务角色加了 `transcribe:StartStreamTranscription`、`translate:TranslateText`、
+  `comprehend:DetectDominantLanguage`(Translate 源语言为 auto 时用),这三个动作都没有资源类型,只能 `*`。
+- **容错:** 流断了会从 web 记录的游标处重开一路流(分片在内存里缓存了最近 64 个),连续 3 次失败才放弃;
+  没有新音频超过 5 秒会补 1 秒静音保活(Transcribe 15 秒收不到音频就断),补的静音会从时间轴上扣掉。
+  单路会话上限 3 小时。
+- **排查日志:** media-server 日志 `[live-transcribe] <id> stream restarting:`;web 日志
+  `[liveTranscribe] <id> chunk a..b (… words) via media server`、`[liveTranslate] … failed`。
+- **重新部署 media-server 可能打断正在进行的实时字幕**:旧任务 release 时 web 会先尝试把会话交给新的
+  media-server 任务(从游标续上);新任务还没就绪就落到 workflow,而 workflow 没有 AssemblyAI key 会直接结束
+  实时字幕。录制本身和录完后的批量转写不受影响。
+
 ## 已知的坑
 
 **Aurora 的 TLS 必须用 `?ssl=Amazon%20RDS`。** 写 `?ssl={"rejectUnauthorized":true}`

@@ -3,25 +3,21 @@ import {
 	organizations,
 	spaces,
 	spaceVideos,
-	videos,
+	type videos,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import {
-	provideOptionalAuth,
-	resolveEffectiveVideoRules,
-	Storage,
-	VideosPolicy,
-} from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import { resolveEffectiveVideoRules, Storage } from "@cap/web-backend";
+import type { Video } from "@cap/web-domain";
 import { type SystemModelMessage, tool } from "ai";
 import { eq } from "drizzle-orm";
-import { Effect, Exit, Option } from "effect";
+import { type Effect, Option } from "effect";
 import { z } from "zod";
 import { formatPlayerTime } from "@/lib/player-time";
-import * as EffectRuntime from "@/lib/server";
 import { runPromise } from "@/lib/server";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
+import { loadMaterialTexts } from "@/lib/video-materials/materials";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import { loadViewableVideo } from "./access";
 import {
 	type FramesIndex,
 	framesIndexKey,
@@ -50,25 +46,13 @@ type Bucket = Effect.Effect.Success<
 export type AskContext =
 	| {
 			status: "ok";
+			video: VideoRow;
 			instructions: SystemModelMessage[];
 			framesIndex: FramesIndex | null;
 			bucket: Bucket;
 			timelineState: VisualTimelineState;
 	  }
 	| { status: "not_found" | "disabled" | "not_ready" | "too_long" };
-
-async function loadViewableVideo(
-	videoId: Video.VideoId,
-): Promise<VideoRow | null> {
-	const exit = await Effect.gen(function* () {
-		const videosPolicy = yield* VideosPolicy;
-		return yield* Effect.promise(() =>
-			db().select().from(videos).where(eq(videos.id, videoId)).limit(1),
-		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
-	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
-
-	return Exit.isSuccess(exit) ? (exit.value[0] ?? null) : null;
-}
 
 async function effectiveSettings(video: VideoRow) {
 	const [[organization], sharedSpaces] = await Promise.all([
@@ -121,10 +105,11 @@ export async function loadAskContext(
 	).pipe(runPromise);
 	const userId = video.ownerId;
 
-	const [vtt, timelineRaw, framesRaw] = await Promise.all([
+	const [vtt, timelineRaw, framesRaw, materials] = await Promise.all([
 		readText(bucket, `${userId}/${videoId}/transcription.vtt`),
 		readText(bucket, visualTimelineKey(userId, videoId)),
 		readText(bucket, framesIndexKey(userId, videoId)),
+		loadMaterialTexts(bucket, video),
 	]);
 	if (!vtt) return { status: "not_ready" };
 
@@ -140,6 +125,7 @@ export async function loadAskContext(
 		chapters: settings.disableChapters ? null : metadata.chapters,
 		cues,
 		timeline,
+		materials,
 	});
 	if (context.length > MAX_CONTEXT_CHARS) return { status: "too_long" };
 
@@ -152,6 +138,7 @@ export async function loadAskContext(
 
 	return {
 		status: "ok",
+		video,
 		bucket,
 		framesIndex,
 		timelineState,

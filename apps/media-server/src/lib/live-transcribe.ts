@@ -71,10 +71,19 @@ export const startLiveSessionSchema = z.object({
 	videoId: z.string().min(1).max(64),
 	session: z.string().min(1).max(64),
 	callbackUrl: z.string().url(),
-	asr: z.object({
-		baseUrl: z.string().url(),
-		apiKey: z.string().min(1),
-	}),
+	asr: z.union([
+		z.object({
+			baseUrl: z.string().url(),
+			apiKey: z.string().min(1),
+		}),
+		z.object({
+			provider: z.literal("aws-transcribe"),
+			languageOptions: z
+				.array(z.string().regex(/^[a-z]{2}-[A-Z]{2}$/))
+				.min(1)
+				.max(5),
+		}),
+	]),
 	contextSeconds: z.number().min(0).max(60),
 	state: stateSchema,
 });
@@ -86,7 +95,7 @@ const reportAnswerSchema = z.union([
 	z.object({ continue: z.literal(true), state: stateSchema }),
 ]);
 
-type Entry = { index: number; duration: number };
+export type Entry = { index: number; duration: number };
 
 export type LiveChunkPlan =
 	| { action: "wait" }
@@ -330,15 +339,15 @@ export type LiveSessionDeps = {
 export class LiveSession {
 	readonly videoId: string;
 	readonly session: string;
-	private readonly request: StartLiveSession;
-	private state: LiveSessionState;
+	protected readonly request: StartLiveSession;
+	protected state: LiveSessionState;
 	private readonly abort = new AbortController();
 	private releasing = false;
 	private manifest: { etag: string | null; value: LiveManifest } | null = null;
-	private initAudio: Uint8Array | null = null;
-	private readonly segmentCache = new Map<number, Uint8Array>();
-	private lastReportAt: number;
-	private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+	protected initAudio: Uint8Array | null = null;
+	protected readonly segmentCache = new Map<number, Uint8Array>();
+	protected lastReportAt: number;
+	protected readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 	private readonly secret: string | undefined;
 	done: Promise<void> = Promise.resolve();
 
@@ -397,11 +406,13 @@ export class LiveSession {
 		this.initAudio = null;
 	}
 
-	private get signal() {
+	protected get signal() {
 		return this.abort.signal;
 	}
 
-	private async loop(): Promise<string | null> {
+	protected async loop(): Promise<string | null> {
+		const asr = this.request.asr;
+		if (!("apiKey" in asr)) throw new Error("No AssemblyAI credentials");
 		const now = Date.now;
 		const startedAt = now();
 		let lastProgressAt = startedAt;
@@ -468,8 +479,8 @@ export class LiveSession {
 						...plan.entries,
 					]);
 					const result = await transcribeAudio({
-						baseUrl: this.request.asr.baseUrl,
-						apiKey: this.request.asr.apiKey,
+						baseUrl: asr.baseUrl,
+						apiKey: asr.apiKey,
 						audio,
 						transcriptionOptions: this.state.transcriptionOptions,
 						signal: this.signal,
@@ -511,7 +522,7 @@ export class LiveSession {
 		return null;
 	}
 
-	private async readManifest(): Promise<LiveManifest | null> {
+	protected async readManifest(): Promise<LiveManifest | null> {
 		try {
 			const response = await fetch(this.state.urls.manifest, {
 				headers: this.manifest?.etag
@@ -541,20 +552,22 @@ export class LiveSession {
 		}
 	}
 
+	protected async fetchBytes(url: string): Promise<Uint8Array> {
+		const response = await fetch(url, {
+			signal: AbortSignal.any([
+				this.signal,
+				AbortSignal.timeout(LIVE.DOWNLOAD_TIMEOUT_MS),
+			]),
+		});
+		if (!response.ok) {
+			await response.body?.cancel().catch(() => {});
+			throw new Error(`Segment not accessible: HTTP ${response.status}`);
+		}
+		return new Uint8Array(await response.arrayBuffer());
+	}
+
 	private async loadAudio(entries: Entry[]): Promise<Uint8Array<ArrayBuffer>> {
-		const fetchBytes = async (url: string) => {
-			const response = await fetch(url, {
-				signal: AbortSignal.any([
-					this.signal,
-					AbortSignal.timeout(LIVE.DOWNLOAD_TIMEOUT_MS),
-				]),
-			});
-			if (!response.ok) {
-				await response.body?.cancel().catch(() => {});
-				throw new Error(`Segment not accessible: HTTP ${response.status}`);
-			}
-			return new Uint8Array(await response.arrayBuffer());
-		};
+		const fetchBytes = (url: string) => this.fetchBytes(url);
 
 		this.initAudio ??= await fetchBytes(this.state.urls.audioInit);
 		const missing = entries.filter(
@@ -606,7 +619,7 @@ export class LiveSession {
 	 * Abandoning one mid-flight is safe: the web app only applies a chunk that
 	 * still matches its cursor and the artifact copy it read.
 	 */
-	private async report(
+	protected async report(
 		body: Record<string, unknown>,
 		timeoutMs: number = LIVE.REPORT_TIMEOUT_MS,
 		attempts = 3,
@@ -667,9 +680,13 @@ export function canAcceptLiveSession() {
 export function startLiveSession(
 	request: StartLiveSession,
 	deps?: LiveSessionDeps,
+	create: (request: StartLiveSession, deps?: LiveSessionDeps) => LiveSession = (
+		request,
+		deps,
+	) => new LiveSession(request, deps),
 ): LiveSession {
 	sessions.get(request.videoId)?.cancel();
-	const session = new LiveSession(request, deps);
+	const session = create(request, deps);
 	sessions.set(request.videoId, session);
 	void session.start().finally(() => {
 		if (sessions.get(request.videoId) === session) {

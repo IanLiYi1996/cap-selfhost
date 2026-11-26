@@ -236,12 +236,22 @@ export const ShareVideo = forwardRef<
 			data.metadata?.liveTranscript != null &&
 			(data.transcriptionStatus == null ||
 				data.transcriptionStatus === "PROCESSING");
+		const liveLanguage =
+			captionContext.selectedLanguage === "original" ||
+			captionContext.selectedLanguage === "off"
+				? null
+				: captionContext.selectedLanguage;
 		const { data: liveTranscript } = useLiveTranscript(
 			data.id,
 			isLiveTranscriptEnabled,
+			liveLanguage,
 		);
 		const liveVttContent =
 			liveTranscript?.kind === "ready" ? liveTranscript.content : null;
+		const liveTranslatedVtt =
+			liveTranscript?.kind === "ready"
+				? (liveTranscript.translatedContent ?? null)
+				: null;
 
 		// Handle comments data
 		useEffect(() => {
@@ -320,10 +330,9 @@ export const ShareVideo = forwardRef<
 			const effectiveVtt =
 				data.transcriptionStatus === "COMPLETE" && vttContent
 					? vttContent
-					: // The live transcript only exists in the original language.
-						captionContext.selectedLanguage === "original"
+					: captionContext.selectedLanguage === "original"
 						? liveVttContent
-						: null;
+						: liveTranslatedVtt;
 
 			if (effectiveVtt) {
 				const blob = new Blob([effectiveVtt], { type: "text/vtt" });
@@ -350,6 +359,7 @@ export const ShareVideo = forwardRef<
 			captionContext.currentVttContent,
 			captionContext.selectedLanguage,
 			liveVttContent,
+			liveTranslatedVtt,
 		]);
 
 		useEffect(() => {

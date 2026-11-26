@@ -17,7 +17,9 @@
 | **一条命令部署** | `./infra-aws/scripts/deploy.sh` 从空账号部署到可用实例,之后每次更新也是同一条命令,见 [`infra-aws/DEPLOY.md`](infra-aws/DEPLOY.md) |
 | **Amazon Transcribe 转写** | 中英自动识别、说话人识别、完整标点;1 小时 45 分钟的录制约 9 分钟出字幕。自建 Whisper 作回退 |
 | **Claude 总结与章节** | Amazon Bedrock 上的 Claude Sonnet 5.5 生成标题、总结和章节 |
-| **视频问答(Ask 标签页)** | Claude Opus 5.5 基于**完整字幕 + 画面时间线**回答,每个结论带可点击的 `[mm:ss]`;需要看清画面细节时自己调用 `look_at` 查看关键帧 |
+| **视频问答(Ask 标签页)** | Claude Opus 5.5 基于**完整字幕 + 画面时间线 + 会议材料**回答,每个结论带可点击的 `[mm:ss]`;需要看清画面细节时自己调用 `look_at` 查看关键帧;每人的对话按视频保存,下次打开接着问 |
+| **会议材料** | 视频所有者和组织成员可给每个录屏上传 PDF、Word、PowerPoint、Excel、HTML、Markdown 等材料,长期保存,问答时与录屏内容一起引用(《文件名》[第 N 页]) |
+| **实时字幕与翻译** | 桌面端 Instant 模式录制时,media-server 用 Amazon Transcribe Streaming 边录边出字幕(约 6–10 秒延迟);观看者可选语言,用 Amazon Translate 实时翻译 |
 | **画面时间线** | 按画面变化抽关键帧,Sonnet 5.5 逐段描述画面并**原样照抄屏幕文字**(幻灯片、代码、报错、界面数值),让问答也能回答"屏幕上显示了什么" |
 | **必须登录才能观看** | 整个实例只对登录用户开放,包括设成"公开"的视频;链接预览、oEmbed、公开合集也一并关闭 |
 | **Cognito 登录** | 管理员建号,通过 OIDC 登录;支持上游新增的 Passkey |
@@ -72,14 +74,14 @@ git clone https://github.com/IanLiYi1996/cap-selfhost.git && cd cap-selfhost
 
 - **固定约 $200/月起**:NAT 网关、Aurora Serverless v2 最小容量、两个常驻 Fargate 服务、内部 ALB,
   外加少量 CloudFront / S3 / Secrets Manager。
-- **按用量**:Amazon Transcribe 约 $1.44/小时音频;画面时间线 1 小时录制约 $0.1–0.3;
+- **按用量**:Amazon Transcribe 约 $1.44/小时音频(Instant 录制的实时字幕另计约 $1.44/小时,翻译按字符计费);画面时间线 1 小时录制约 $0.1–0.3;
   问答首问约 $0.2、追问约 $0.01(按 Anthropic 官方价估算,Bedrock 单独计价)。
 
 ## 目前不支持
 
 - **邮件不发送**:没有配置发信服务,邮箱验证码登录、评论通知、邀请邮件都不可用。
 - **iOS App**:商店版的服务器地址写死为 cap.so,手机上直接用浏览器打开分享页。
-- **实时字幕**(边录边出):依赖 AssemblyAI 的流式接口,本分支只做录制后的批量转写。
+- **Studio 模式和上传视频的实时字幕**:实时字幕只支持桌面端 Instant 模式,其余录完后批量转写。
 - **用户自配的 S3 桶**:可以存视频,但不会转写,也没有画面时间线。
 - **中英混说时的英文术语**:Transcribe 对 Agent、GraphRAG 这类英文词识别偏弱(纯中文术语反而比 Whisper 准)。
 
@@ -94,6 +96,8 @@ git clone https://github.com/IanLiYi1996/cap-selfhost.git && cd cap-selfhost
 | `apps/web/lib/aws-transcribe.ts` | Amazon Transcribe 转写后端 |
 | `apps/web/lib/video-qa/` · `apps/web/workflows/visual-timeline.ts` | 视频问答与画面时间线 |
 | `apps/web/app/api/videos/[videoId]/ask/` · `apps/web/app/s/[videoId]/_components/tabs/Ask.tsx` | 问答接口和 Ask 标签页 |
+| `apps/web/lib/video-materials/` · `apps/web/app/api/videos/[videoId]/materials/` | 会议材料的上传、文本提取与存储 |
+| `apps/media-server/src/lib/live-transcribe-stream.ts` · `apps/web/lib/live-translate*.ts` | 实时字幕(Transcribe Streaming)与实时翻译(Translate) |
 | `apps/web/lib/sign-in-required.ts` | 实例级"必须登录才能观看" |
 
 对上游文件的改动(转写门控、权限策略、限流、OG 图等),以及每次合并上游新版本后必须检查的地方,

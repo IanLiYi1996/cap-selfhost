@@ -6,6 +6,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { start } from "workflow/api";
 import {
 	type FarmLiveStart,
+	isAwsLiveTranscription,
 	rotateLiveSession,
 	startFarmLiveTranscription,
 	WORKFLOW_LIVE_SESSION,
@@ -40,7 +41,7 @@ export async function maybeStartLiveTranscription({
 	orgId: Organisation.OrganisationId;
 }): Promise<LiveTranscriptionStart> {
 	try {
-		if (!serverEnv().ASSEMBLY_API_KEY) {
+		if (!serverEnv().ASSEMBLY_API_KEY && !isAwsLiveTranscription()) {
 			return "skipped";
 		}
 

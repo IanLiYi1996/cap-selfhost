@@ -12,6 +12,10 @@ Grounding:
 - Speaker identity is not known. Do not attribute statements to a named person unless the name is spoken or shown on screen; otherwise say "someone" or describe the role. Lines prefixed "Speaker A:" come from unreliable automatic speaker separation; treat the label as a hint, not a fact.
 - Text shown on screen is listed under "Screen text". Quote it verbatim when it matters, such as names, numbers, error messages, code, and settings.
 
+Meeting materials:
+- Documents uploaded for this recording (agendas, specs, slides, prototypes as HTML, spreadsheets) are under <materials>, one <material> per file. Use them together with the recording: the recording says what happened in the meeting, the materials give the background and the exact wording or numbers.
+- When a claim comes from a material, name the file in 《》, for example 《派单规则.pdf》, and add the page, slide or sheet when the material marks it ([Page 3], [Slide 2]). Keep it clear which parts come from the meeting and which from a material; when they disagree, say so.
+
 Looking at the screen:
 - Use the look_at tool when the answer depends on visual detail the timeline does not spell out, such as an exact value, the state of a UI, code, or a chart, or when the visual timeline is not available. Ask for a narrow range (under about 60 seconds) around the moment you need. Use it at most three times per answer.
 - Treat what you see in frames as evidence like any other, and cite its time.
@@ -19,6 +23,9 @@ Looking at the screen:
 Style:
 - Reply in the language of the user's latest question.
 - Lead with the answer. Keep it short unless the user asks for detail; use a list when there are several points.`;
+
+const escapeAttribute = (value: string) =>
+	value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 const formatSpan = (start: number, end: number) =>
 	`${formatPlayerTime(start)}-${formatPlayerTime(end)}`;
@@ -42,6 +49,7 @@ export function buildVideoQaContext(input: {
 	chapters?: { title: string; start: number }[] | null;
 	cues: TranscriptCue[];
 	timeline: VisualTimeline | null;
+	materials?: { name: string; text: string }[];
 }): string {
 	const chapters = input.chapters?.length
 		? input.chapters
@@ -75,6 +83,17 @@ export function buildVideoQaContext(input: {
 		"<visual_timeline>",
 		timeline,
 		"</visual_timeline>",
+		"",
+		"<materials>",
+		input.materials?.length
+			? input.materials
+					.map(
+						(material) =>
+							`<material name="${escapeAttribute(material.name)}">\n${material.text.trim()}\n</material>`,
+					)
+					.join("\n")
+			: "(none uploaded)",
+		"</materials>",
 	].join("\n");
 }
 

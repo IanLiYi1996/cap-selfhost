@@ -14,6 +14,7 @@ import {
 	ASSEMBLYAI_SUPPORTED_LANGUAGES,
 	getAssemblyAITranscriptionOptions,
 } from "@/lib/assemblyai";
+import { streamingLanguageOptions } from "@/lib/aws-transcribe";
 import {
 	LIVE_TRANSCRIPT_NO_SEGMENTS,
 	type LiveTranscriptArtifact,
@@ -65,13 +66,22 @@ type LiveVideoRow = {
 	orgSettings: (typeof organizations.$inferSelect)["settings"] | null;
 };
 
+/** Amazon Transcribe Streaming on the media server, instead of AssemblyAI. */
+export function isAwsLiveTranscription() {
+	const env = serverEnv();
+	return (
+		env.LIVE_TRANSCRIBE_ASR === "aws-transcribe" &&
+		env.LIVE_TRANSCRIBE_RUNNER === "media-server"
+	);
+}
+
 export function isFarmLiveTranscriptionEnabled() {
 	const env = serverEnv();
 	return (
 		env.LIVE_TRANSCRIBE_RUNNER === "media-server" &&
 		Boolean(env.MEDIA_SERVER_URL) &&
 		Boolean(env.MEDIA_SERVER_WEBHOOK_SECRET) &&
-		Boolean(env.ASSEMBLY_API_KEY)
+		(Boolean(env.ASSEMBLY_API_KEY) || isAwsLiveTranscription())
 	);
 }
 
@@ -263,10 +273,17 @@ export async function startFarmLiveTranscription(
 				"/api/webhooks/media-server/live-transcribe",
 				webhookBaseUrl,
 			).toString(),
-			asr: {
-				baseUrl: env.ASSEMBLY_BASE_URL || "https://api.assemblyai.com",
-				apiKey: env.ASSEMBLY_API_KEY,
-			},
+			asr: isAwsLiveTranscription()
+				? {
+						provider: "aws-transcribe",
+						languageOptions: streamingLanguageOptions(
+							env.TRANSCRIBE_LANGUAGE_OPTIONS,
+						),
+					}
+				: {
+						baseUrl: env.ASSEMBLY_BASE_URL || "https://api.assemblyai.com",
+						apiKey: env.ASSEMBLY_API_KEY,
+					},
 			contextSeconds: liveContextSeconds(),
 			state,
 		});

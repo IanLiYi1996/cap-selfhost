@@ -306,6 +306,12 @@ export async function promoteLiveTranscript(
 				reason: `canonical status is ${video.transcriptionStatus}`,
 			};
 		}
+		// Live words from Amazon Transcribe Streaming carry no speakers; the
+		// batch pass labels them and is more accurate, so it always runs.
+		if (serverEnv().LIVE_TRANSCRIBE_ASR === "aws-transcribe") {
+			await queueFullPassFallback(videoId, userId);
+			return { promoted: false, reason: "batch transcription preferred" };
+		}
 
 		const [bucket] = await Storage.getAccessForVideo(
 			decodeStorageVideo(video),

@@ -186,16 +186,31 @@ function CaptionProviderForVideo({
 			selectedLanguageRef.current = language;
 			setSelectedLanguage(language);
 
+			// Until the transcript is final, captions are translated live from the
+			// live transcript instead (see useLiveTranscript).
 			if (
 				language !== "off" &&
 				language !== "original" &&
+				transcriptionStatus === "COMPLETE" &&
 				!translatedVttContent.has(language)
 			) {
 				await requestTranslation(language);
 			}
 		},
-		[translatedVttContent, requestTranslation],
+		[translatedVttContent, requestTranslation, transcriptionStatus],
 	);
+
+	// A language picked during the live transcript carries over to the final one.
+	useEffect(() => {
+		const language = selectedLanguageRef.current;
+		if (
+			transcriptionStatus === "COMPLETE" &&
+			language !== "off" &&
+			language !== "original"
+		) {
+			void requestTranslation(language);
+		}
+	}, [transcriptionStatus, requestTranslation]);
 
 	const value: CaptionContextValue = useMemo(
 		() => ({

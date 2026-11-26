@@ -8,6 +8,7 @@ import { useCurrentUser } from "@/app/Layout/AuthContext";
 import { splitTimestampCitations } from "@/lib/video-qa/citations";
 import { videoStatusQueryOptions } from "@/lib/video-status-query";
 import type { VideoData } from "../../types";
+import { AskMaterials } from "./AskMaterials";
 
 type Turn = {
 	id: number;
@@ -27,7 +28,8 @@ const SUGGESTIONS = [
 const MAX_QUESTION_LENGTH = 2000;
 
 // Tab content unmounts on every tab switch, so the conversation lives here for
-// the life of the page instead of in component state.
+// the life of the page instead of in component state. The server keeps each
+// viewer's history too; it is loaded once per page when nothing is cached.
 const conversations = new Map<string, Turn[]>();
 
 const SEEK_PREFIX = "#t=";
@@ -114,6 +116,39 @@ export function Ask({
 	};
 
 	useEffect(() => () => abortRef.current?.abort(), []);
+
+	const signedIn = Boolean(user);
+	useEffect(() => {
+		if (!signedIn || conversations.has(data.id)) return;
+		let cancelled = false;
+		fetch(`/api/videos/${data.id}/ask/history`)
+			.then((response) => (response.ok ? response.json() : null))
+			.then((body: { turns?: Pick<Turn, "role" | "content">[] } | null) => {
+				if (cancelled || !body?.turns?.length || conversations.has(data.id))
+					return;
+				const loaded = body.turns.map((turn) => ({
+					id: nextTurnId++,
+					role: turn.role,
+					content: turn.content,
+				}));
+				conversations.set(data.id, loaded);
+				setTurnsState(loaded);
+			})
+			.catch(() => undefined);
+		return () => {
+			cancelled = true;
+		};
+	}, [data.id, signedIn]);
+
+	const clearConversation = async () => {
+		if (streaming || !window.confirm("Clear this conversation?")) return;
+		conversations.set(data.id, []);
+		setTurnsState([]);
+		setVisualNote(false);
+		await fetch(`/api/videos/${data.id}/ask/history`, {
+			method: "DELETE",
+		}).catch(() => undefined);
+	};
 
 	const scrollKey = `${turns.length}:${turns.at(-1)?.content.length ?? 0}`;
 	useEffect(() => {
@@ -228,6 +263,7 @@ export function Ask({
 
 	return (
 		<div className="flex flex-col h-full">
+			<AskMaterials videoId={data.id} />
 			<div ref={scrollRef} className="overflow-y-auto flex-1 p-4 space-y-4">
 				{turns.length === 0 ? (
 					<div className="space-y-3">
@@ -236,8 +272,8 @@ export function Ask({
 								Ask about this video
 							</h3>
 							<p className="text-sm text-gray-10">
-								Answers come from what was said and shown, with timestamps you
-								can click to jump to.
+								Answers come from what was said and shown, plus any meeting
+								materials, with timestamps you can click to jump to.
 							</p>
 						</div>
 						<div className="flex flex-col gap-2">
@@ -316,7 +352,16 @@ export function Ask({
 					}}
 					className="block w-full px-3 py-2 text-sm rounded-lg border resize-none border-gray-5 bg-gray-1 text-gray-12 placeholder:text-gray-9 focus:outline-none focus:ring-2 focus:ring-blue-9"
 				/>
-				<div className="flex gap-2 justify-end mt-2">
+				<div className="flex gap-2 justify-end items-center mt-2">
+					{turns.length > 0 && !streaming && (
+						<button
+							type="button"
+							onClick={clearConversation}
+							className="mr-auto text-xs text-gray-10 hover:text-gray-12"
+						>
+							Clear conversation
+						</button>
+					)}
 					{streaming ? (
 						<Button
 							type="button"

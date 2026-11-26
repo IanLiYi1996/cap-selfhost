@@ -60,6 +60,21 @@ export const transcribeOutputKey = (
 	purpose: TranscribePurpose,
 ) => `${userId}/${videoId}/transcribe.${purpose}.v${OUTPUT_VERSION}.json`;
 
+/** Languages a live stream identifies between (Transcribe Streaming takes
+ * at most five). */
+export function streamingLanguageOptions(
+	configuredOptions: string | undefined,
+): string[] {
+	const configured = (configuredOptions ?? "")
+		.split(",")
+		.map((code) => code.trim())
+		.filter((code) => /^[a-z]{2}-[A-Z]{2}$/.test(code));
+	return (configured.length > 0 ? configured : DEFAULT_LANGUAGE_OPTIONS).slice(
+		0,
+		5,
+	);
+}
+
 /**
  * The video's language setting is the language its AI summary is written in,
  * not necessarily the one spoken, so it joins the candidates instead of

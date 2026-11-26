@@ -10,6 +10,7 @@
 		"test:watch": "bun test --watch"
 	},
 	"dependencies": {
+		"@aws-sdk/client-transcribe-streaming": "^3.1178.0",
 		"@mediabunny/server": "^1.45.2",
 		"hono": "^4.13.16",
 		"mediabunny": "^1.45.2",

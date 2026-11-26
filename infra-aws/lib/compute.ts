@@ -112,6 +112,19 @@ export class Compute extends Construct {
 				],
 			}),
 		);
+		// Live captions: Transcribe Streaming on the media server, Translate on
+		// the web app. Neither action has a resource type to scope by.
+		this.taskRole.addToPolicy(
+			new iam.PolicyStatement({
+				actions: [
+					"transcribe:StartStreamTranscription",
+					"translate:TranslateText",
+					// Translate's "auto" source language asks Comprehend.
+					"comprehend:DetectDominantLanguage",
+				],
+				resources: ["*"],
+			}),
+		);
 
 		const webSecurityGroup = new ec2.SecurityGroup(this, "WebSg", {
 			vpc: props.vpc,
@@ -177,6 +190,9 @@ export class Compute extends Construct {
 				CAP_CHROME_EXTENSION_ID: "fefjaffcodfiogbbngmjkcjpbpclbdcp",
 				TRANSCRIPTION_BACKEND: "transcribe",
 				TRANSCRIBE_LANGUAGE_OPTIONS: "zh-CN,en-US",
+				LIVE_TRANSCRIBE_RUNNER: "media-server",
+				LIVE_TRANSCRIBE_ASR: "aws-transcribe",
+				LIVE_TRANSLATE_BACKEND: "aws-translate",
 				AI_PROVIDER: "bedrock",
 				BEDROCK_REGION: cdk.Stack.of(this).region,
 			},
@@ -245,7 +261,10 @@ export class Compute extends Construct {
 				logRetention: logs.RetentionDays.ONE_MONTH,
 			}),
 			portMappings: [{ name: "media", containerPort: MEDIA_SERVER_PORT }],
-			environment: { PORT: String(MEDIA_SERVER_PORT) },
+			environment: {
+				PORT: String(MEDIA_SERVER_PORT),
+				AWS_REGION: cdk.Stack.of(this).region,
+			},
 			secrets: {
 				MEDIA_SERVER_WEBHOOK_SECRET: commonSecrets.MEDIA_SERVER_WEBHOOK_SECRET,
 			},

@@ -5,11 +5,13 @@ import { stepCountIs, streamText } from "ai";
 import type { NextRequest } from "next/server";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { runWithAiProviders } from "@/lib/ai/run";
+import { updateJsonObject } from "@/lib/video-materials/storage";
 import {
 	createLookAtTool,
 	loadAskContext,
 	parseAskRequest,
 } from "@/lib/video-qa/ask";
+import { appendHistory, askHistoryKey } from "@/lib/video-qa/history";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +50,8 @@ const STATUS_ERRORS = {
 	},
 	too_long: {
 		status: 413,
-		error: "This recording is too long to answer questions about.",
+		error:
+			"This recording and its materials are too long to answer questions about. Remove a large material and try again.",
 	},
 } as const;
 
@@ -169,15 +172,29 @@ export async function POST(
 		);
 	}
 
+	const historyKey = askHistoryKey(context.video.ownerId, videoId, user.id);
+	const saveTurn = (answer: string) =>
+		updateJsonObject(context.bucket, historyKey, (raw) => ({
+			next: JSON.parse(
+				appendHistory(raw, parsed.question, answer, new Date().toISOString()),
+			),
+			result: undefined,
+		})).catch((error) => {
+			console.error(`[video-qa] ${videoId}: could not save history`, error);
+		});
+
 	const encoder = new TextEncoder();
+	let answer = "";
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
 			for (const text of upstream.buffered) {
+				answer += text;
 				controller.enqueue(encoder.encode(text));
 			}
 			const pump = (): Promise<void> =>
-				upstream.reader.read().then(({ done, value }) => {
+				upstream.reader.read().then(async ({ done, value }) => {
 					if (done) {
+						if (answer.trim()) await saveTurn(answer);
 						controller.close();
 						return;
 					}
@@ -185,6 +202,7 @@ export async function POST(
 					if (value.type === "abort")
 						throw new Error(value.reason ?? "video-qa stream aborted");
 					if (value.type === "text-delta" && value.text) {
+						answer += value.text;
 						controller.enqueue(encoder.encode(value.text));
 					}
 					return pump();

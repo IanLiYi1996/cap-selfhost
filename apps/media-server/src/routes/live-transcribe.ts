@@ -7,6 +7,7 @@ import {
 	startLiveSession,
 	startLiveSessionSchema,
 } from "../lib/live-transcribe";
+import { createLiveSession } from "../lib/live-transcribe-stream";
 
 const liveTranscribe = new Hono();
 
@@ -44,7 +45,7 @@ liveTranscribe.post("/sessions", async (c) => {
 		return c.json({ error: "Server is busy", code: "SERVER_BUSY" }, 503);
 	}
 
-	startLiveSession(result.data);
+	startLiveSession(result.data, undefined, createLiveSession);
 	return c.json({ accepted: true }, 202);
 });
 

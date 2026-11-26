@@ -6,6 +6,15 @@ import {
 	type StartLiveSession,
 	transcribeAudio,
 } from "../../lib/live-transcribe";
+import {
+	type PcmDecoder,
+	planStreamReport,
+	StableWordCollector,
+	StreamingLiveSession,
+	type StreamResult,
+	StreamTimeline,
+	type StreamTranscriber,
+} from "../../lib/live-transcribe-stream";
 
 const seg = (index: number, duration = 2) => ({ index, duration });
 const manifestOf = (
@@ -451,4 +460,224 @@ describe("transcribeAudio", () => {
 		await expect(call("en")).rejects.toThrow("decode failed");
 		server.stop(true);
 	});
+});
+
+describe("StableWordCollector", () => {
+	const item = (
+		Content: string,
+		start: number,
+		Stable = true,
+		Type = "pronunciation",
+	) => ({
+		Content,
+		StartTime: start,
+		EndTime: start + 0.2,
+		Stable,
+		Type,
+	});
+
+	test("takes the stable prefix of a partial once, then the rest when final", () => {
+		const collector = new StableWordCollector();
+		collector.accept({
+			ResultId: "r1",
+			IsPartial: true,
+			LanguageCode: "zh-CN",
+			Alternatives: [{ Items: [item("今天", 0), item("开会", 0.5, false)] }],
+		});
+		expect(collector.words.map((w) => w.text)).toEqual(["今天"]);
+		expect(collector.unstableFromMs()).toBe(500);
+		expect(collector.languageCode).toBe("zh");
+
+		collector.accept({
+			ResultId: "r1",
+			IsPartial: false,
+			Alternatives: [
+				{
+					Items: [
+						item("今天", 0),
+						item("开会", 0.5),
+						item("。", 0.7, true, "punctuation"),
+					],
+				},
+			],
+		});
+		expect(collector.words.map((w) => w.text)).toEqual(["今天", "开会。"]);
+		expect(collector.words[1]).toMatchObject({ start: 500, end: 700 });
+		expect(collector.unstableFromMs()).toBeNull();
+	});
+});
+
+describe("StreamTimeline", () => {
+	test("removes keepalive silence from stream time", () => {
+		const timeline = new StreamTimeline();
+		timeline.addSilence(4000, 1000);
+		expect(timeline.toRecordingMs(3000)).toBe(3000);
+		expect(timeline.toRecordingMs(4500)).toBe(4000);
+		expect(timeline.toRecordingMs(6000)).toBe(5000);
+	});
+});
+
+describe("planStreamReport", () => {
+	const segments = [
+		{ index: 4, startMs: 0, endMs: 3000 },
+		{ index: 5, startMs: 3000, endMs: 6000 },
+		{ index: 6, startMs: 6000, endMs: 9000 },
+	];
+	const words = [
+		{ text: "a", start: 100, end: 400 },
+		{ text: "b", start: 5900, end: 6100 },
+		{ text: "c", start: 6200, end: 6500 },
+	];
+
+	test("reports whole segments before the safe point, with their words", () => {
+		expect(
+			planStreamReport({ segments, cursor: 3, safeMs: 7000, words }),
+		).toEqual({
+			lastIndex: 5,
+			words: [
+				{ text: "a", start: 100, end: 400 },
+				{ text: "b", start: 5900, end: 6100 },
+			],
+			taken: 2,
+		});
+	});
+
+	test("times words from the first unreported segment", () => {
+		expect(
+			planStreamReport({
+				segments,
+				cursor: 5,
+				safeMs: Number.POSITIVE_INFINITY,
+				words: words.slice(2),
+			}),
+		).toEqual({
+			lastIndex: 6,
+			words: [{ text: "c", start: 200, end: 500 }],
+			taken: 1,
+		});
+	});
+
+	test("waits while the first segment is still being heard", () => {
+		expect(planStreamReport({ segments, cursor: 3, safeMs: 2500, words })).toBe(
+			null,
+		);
+	});
+});
+
+describe("StreamingLiveSession", () => {
+	// Every segment is 2 s of audio; the fake recognizer says "w<segment>"
+	// in each, finalising it as soon as the segment has been heard.
+	const SEGMENT_MS = 2000;
+	const decoder = (): PcmDecoder => {
+		let push: ((bytes: Uint8Array | null) => void) | null = null;
+		const pending: (Uint8Array | null)[] = [];
+		const emit = (bytes: Uint8Array | null) =>
+			push ? push(bytes) : pending.push(bytes);
+		return {
+			write(bytes) {
+				if (bytes.byteLength === 1 && bytes[0] === 0) return;
+				emit(new Uint8Array(SEGMENT_MS * 32));
+			},
+			end() {
+				emit(null);
+			},
+			kill() {
+				emit(null);
+			},
+			output: (async function* () {
+				for (;;) {
+					const next =
+						pending.shift() ??
+						(await new Promise<Uint8Array | null>((resolve) => {
+							push = (bytes) => {
+								push = null;
+								resolve(bytes);
+							};
+						}));
+					if (next === null || next === undefined) return;
+					yield next;
+				}
+			})(),
+		};
+	};
+	const transcriber: StreamTranscriber = async ({ audio }) =>
+		(async function* () {
+			let heardMs = 0;
+			let said = 0;
+			for await (const frame of audio) {
+				heardMs += frame.byteLength / 32;
+				while (heardMs >= (said + 1) * SEGMENT_MS) {
+					said++;
+					const start = (said - 1) * 2 + 0.1;
+					const results: StreamResult[] = [
+						{
+							ResultId: `r${said}`,
+							IsPartial: false,
+							LanguageCode: "en-US",
+							Alternatives: [
+								{
+									Items: [
+										{
+											Content: `w${said}`,
+											StartTime: start,
+											EndTime: start + 0.5,
+										},
+									],
+								},
+							],
+						},
+						{
+							ResultId: `r${said + 1}`,
+							IsPartial: true,
+							StartTime: said * 2,
+							Alternatives: [{ Items: [] }],
+						},
+					];
+					yield results;
+				}
+			}
+		})();
+
+	test("reports every segment's words in order, then done", async () => {
+		const cap = createFakeCap();
+		const request: StartLiveSession = {
+			...startRequest(cap),
+			asr: { provider: "aws-transcribe", languageOptions: ["en-US"] },
+		};
+		const session = new StreamingLiveSession(request, {
+			...deps,
+			decoder,
+			transcriber,
+		});
+		const done = session.start();
+		for (let index = 1; index <= 6; index++) {
+			cap.record([index], index === 6);
+			await Bun.sleep(3);
+		}
+		await done;
+		cap.stop();
+
+		const chunks = cap.reports.filter((report) => report.action === "chunk");
+		let expected = -1;
+		const words: string[] = [];
+		for (const chunk of chunks) {
+			expect(chunk.lastProcessedIndex).toBe(expected);
+			expect(chunk.contextFromIndex).toBeNull();
+			for (const word of chunk.words as { text: string; start: number }[]) {
+				words.push(word.text);
+				// Each word sits 100 ms into its segment, timed from the chunk start.
+				const index = Number(word.text.slice(1));
+				const first = expected === -1 ? 1 : expected + 1;
+				expect(word.start).toBe((index - first) * SEGMENT_MS + 100);
+			}
+			expected = chunk.lastIndex as number;
+		}
+		expect(expected).toBe(6);
+		expect(words).toEqual(["w1", "w2", "w3", "w4", "w5", "w6"]);
+		expect(chunks[0]?.languageCode).toBe("en");
+		expect(cap.reports.at(-1)).toMatchObject({
+			action: "finish",
+			outcome: "done",
+		});
+	}, 30_000);
 });

@@ -155,9 +155,25 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 		(data.transcriptionStatus == null ||
 			data.transcriptionStatus === "PROCESSING");
 
+	const liveLanguage =
+		selectedLanguage === "original" ? null : selectedLanguage;
 	const { data: liveTranscript } = useLiveTranscript(
 		data.id,
 		isLiveTranscriptEnabled,
+		liveLanguage,
+	);
+	const canTranslateLive =
+		liveTranscript?.kind === "ready" && liveTranscript.canTranslate;
+	const liveTranslatedContent =
+		liveLanguage && liveTranscript?.kind === "ready"
+			? (liveTranscript.translatedContent ?? null)
+			: null;
+	const liveTranslations = useMemo(
+		() =>
+			liveTranslatedContent
+				? parseTranscriptVTT(liveTranslatedContent).map((entry) => entry.text)
+				: [],
+		[liveTranslatedContent],
 	);
 
 	// The promotion handoff deletes the live artifact moments before the
@@ -473,11 +489,35 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 				<span className="text-[11px] font-medium text-gray-12">
 					{isLiveTranscriptActive ? "Live transcript" : "Transcript"}
 				</span>
+				{canTranslateLive && (
+					<label className="ml-auto inline-flex items-center gap-1.5 text-[11px] text-gray-10">
+						<Globe className="size-3 text-gray-9" />
+						<span className="sr-only">Translate live transcript</span>
+						<select
+							value={selectedLanguage}
+							onChange={(event) =>
+								captionContext.setSelectedLanguage(
+									event.target.value as LanguageCode | "original",
+								)
+							}
+							className="h-7 rounded-full border border-gray-4 bg-gray-1 px-2 text-[11px] font-medium text-gray-11 hover:bg-gray-2"
+						>
+							<option value="original">Original only</option>
+							{(
+								Object.entries(SUPPORTED_LANGUAGES) as [LanguageCode, string][]
+							).map(([code, name]) => (
+								<option key={code} value={code}>
+									{name}
+								</option>
+							))}
+						</select>
+					</label>
+				)}
 			</div>
 
 			<div className="overflow-y-auto flex-1">
 				<div className="px-3 py-3">
-					{liveTranscriptData.map((entry) => (
+					{liveTranscriptData.map((entry, index) => (
 						<div
 							key={entry.id}
 							className={`flex items-start gap-1 rounded-lg px-2 transition-colors ${
@@ -494,6 +534,12 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 								</span>
 								<span className="min-w-0 flex-1 text-[13px] leading-[22px] text-gray-11">
 									{entry.text}
+									{liveTranslations[index] &&
+										liveTranslations[index] !== entry.text && (
+											<span className="block text-gray-12">
+												{liveTranslations[index]}
+											</span>
+										)}
 								</span>
 							</button>
 						</div>
