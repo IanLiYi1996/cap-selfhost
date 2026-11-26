@@ -22,6 +22,18 @@ describe("Compute", () => {
 		template.resourceCountIs("AWS::ECS::Service", 2);
 	});
 
+	it("cap-web 在 media-server 之后创建（Service Connect 端点在 deployment 创建时固定）", () => {
+		const services = template.findResources("AWS::ECS::Service");
+		const id = (prefix: string) => {
+			const found = Object.keys(services).find((key) => key.startsWith(prefix));
+			expect(found).toBeDefined();
+			return found as string;
+		};
+		const web = services[id("ComputeWebService")];
+		const dependsOn = [web.DependsOn ?? []].flat();
+		expect(dependsOn).toContain(id("ComputeMediaService"));
+	});
+
 	it("S3_PATH_STYLE 为 false（默认 true 是给 MinIO 的）", () => {
 		const env = taskDefs()
 			.flatMap(

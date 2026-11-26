@@ -289,6 +289,12 @@ export class Compute extends Construct {
 			circuitBreaker: { rollback: true },
 		});
 
+		// Service Connect freezes a deployment's endpoint list when the deployment
+		// is created. Created in parallel, cap-web's first deployment missed the
+		// media-server endpoint by 83 ms and every call to it failed with
+		// "fetch failed" until cap-web was redeployed.
+		this.webService.node.addDependency(this.mediaService);
+
 		mediaSecurityGroup.addIngressRule(
 			webSecurityGroup,
 			ec2.Port.tcp(MEDIA_SERVER_PORT),
