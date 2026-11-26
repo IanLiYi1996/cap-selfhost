@@ -212,11 +212,20 @@ fi
 if $PLAN && ! $SKIP_IMAGES && ! $FIRST_DEPLOY; then
 	note "[plan] would: roll services onto the new images"
 fi
-if $BUILT_IMAGES && ! $FIRST_DEPLOY; then
-	log "Rolling services onto the new images"
+# Service Connect gives a deployment only the endpoints that exist when the
+# deployment is created, so the deployments made with the services cannot all
+# reach each other. Rolling both now, with both endpoints in place, makes
+# cap-web -> media-server and the webhooks back resolve.
+roll_services() {
+	log "$1"
 	for service in $SERVICES; do
 		aws ecs update-service --cluster "$CLUSTER" --service "$service" --force-new-deployment >/dev/null
 	done
+}
+if $FIRST_DEPLOY; then
+	roll_services "Rolling services so Service Connect sees both endpoints"
+elif $BUILT_IMAGES; then
+	roll_services "Rolling services onto the new images"
 fi
 if ! $PLAN; then
 	log "Waiting for services to become stable"
