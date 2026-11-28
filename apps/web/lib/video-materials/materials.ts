@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@cap/database";
-import { organizationMembers, type videos } from "@cap/database/schema";
+import { organizationMembers, users, type videos } from "@cap/database/schema";
 import { Storage } from "@cap/web-backend";
 import type { User, Video } from "@cap/web-domain";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { runPromise } from "@/lib/server";
 import { loadViewableVideo } from "@/lib/video-qa/access";
 import { decodeStorageVideo } from "@/lib/video-storage";
+import type { LoadedMaterial } from "./context";
 import { extractMaterialText, materialKind } from "./extract";
 import {
 	addMaterial,
@@ -20,6 +21,13 @@ import {
 	parseMaterialsManifest,
 	removeMaterial,
 } from "./manifest";
+import {
+	type MaterialPage,
+	materialContentKey,
+	pagesFromText,
+	parseMaterialContent,
+	RENDERED_KINDS,
+} from "./pages";
 import { type Bucket, readText, updateJsonObject } from "./storage";
 
 type VideoRow = typeof videos.$inferSelect;
@@ -111,11 +119,13 @@ export async function uploadMaterial(
 			error: `${file.name} could not be read. Is it a valid, unencrypted file?`,
 		};
 	}
-	if (!text.trim()) {
+	const rendered = RENDERED_KINDS.has(kind);
+	// A scan has no text layer; its pages are read off their images later.
+	if (!text.trim() && !rendered) {
 		return {
 			ok: false,
 			status: 422,
-			error: `${file.name} has no text to read (a scanned PDF or an image-only document?).`,
+			error: `${file.name} has no text to read.`,
 		};
 	}
 
@@ -127,6 +137,7 @@ export async function uploadMaterial(
 		uploadedAt: new Date().toISOString(),
 		uploadedBy: userId,
 		textChars: text.length,
+		status: rendered ? "processing" : "ready",
 	};
 	const { ownerId, id: videoId } = video;
 
@@ -185,15 +196,10 @@ export async function deleteMaterial(
 	);
 	if (!removed) return false;
 
-	await Promise.all(
-		[
-			materialFileKey(video.ownerId, video.id, removed.id, removed.name),
-			materialTextKey(video.ownerId, video.id, removed.id),
-		].map((key) =>
-			bucket
-				.deleteObject(key)
-				.pipe(runPromise)
-				.catch(() => undefined),
+	await deleteMaterialObjects(bucket, video, removed.id).catch((error) =>
+		console.warn(
+			`[materials] ${video.id}: cleanup of ${removed.id} failed`,
+			error,
 		),
 	);
 	return true;
@@ -217,22 +223,86 @@ export async function materialDownloadUrl(
 		.pipe(runPromise);
 }
 
-export type MaterialText = { name: string; text: string };
+export async function uploaderNames(
+	materials: readonly MaterialEntry[],
+): Promise<Map<string, string>> {
+	const ids = [...new Set(materials.map((m) => m.uploadedBy))];
+	if (ids.length === 0) return new Map();
+	const rows = await db()
+		.select({ id: users.id, name: users.name, email: users.email })
+		.from(users)
+		.where(inArray(users.id, ids as User.UserId[]));
+	return new Map(rows.map((row) => [row.id, row.name || row.email]));
+}
 
-export async function loadMaterialTexts(
+/** The original, its text, page images and notes: everything under the
+ * material's folder. */
+async function deleteMaterialObjects(
 	bucket: Bucket,
 	video: VideoRow,
-): Promise<MaterialText[]> {
+	materialId: string,
+) {
+	const prefix = `${video.ownerId}/${video.id}/materials/${materialId}/`;
+	let continuationToken: string | undefined;
+	do {
+		const listed = await bucket
+			.listObjects({ prefix, continuationToken })
+			.pipe(runPromise);
+		const keys = (listed.Contents ?? []).flatMap((object) =>
+			object.Key ? [{ Key: object.Key }] : [],
+		);
+		if (keys.length > 0) await bucket.deleteObjects(keys).pipe(runPromise);
+		continuationToken = listed.IsTruncated
+			? listed.NextContinuationToken
+			: undefined;
+	} while (continuationToken);
+}
+
+async function pagesOf(
+	bucket: Bucket,
+	video: VideoRow,
+	material: MaterialEntry,
+): Promise<MaterialPage[]> {
+	const content = parseMaterialContent(
+		await readText(
+			bucket,
+			materialContentKey(video.ownerId, video.id, material.id),
+		),
+	);
+	if (content) return content;
+	const text =
+		(await readText(
+			bucket,
+			materialTextKey(video.ownerId, video.id, material.id),
+		)) ?? "";
+	return pagesFromText(material.kind, text);
+}
+
+/** Every material page by page, as the Q&A model reads them. */
+export async function loadMaterials(
+	bucket: Bucket,
+	video: VideoRow,
+): Promise<LoadedMaterial[]> {
 	const materials = await listMaterials(bucket, video);
-	const texts = await Promise.all(
+	return Promise.all(
 		materials.map(async (material) => ({
+			id: material.id,
 			name: material.name,
-			text:
-				(await readText(
-					bucket,
-					materialTextKey(video.ownerId, video.id, material.id),
-				)) ?? "",
+			kind: material.kind,
+			pages: await pagesOf(bucket, video, material),
+			processing: material.status === "processing",
 		})),
 	);
-	return texts.filter((material) => material.text.trim());
+}
+
+export async function loadMaterialPages(
+	bucket: Bucket,
+	video: VideoRow,
+	materialId: string,
+): Promise<{ material: MaterialEntry; pages: MaterialPage[] } | null> {
+	const material = (await listMaterials(bucket, video)).find(
+		(m) => m.id === materialId,
+	);
+	if (!material) return null;
+	return { material, pages: await pagesOf(bucket, video, material) };
 }

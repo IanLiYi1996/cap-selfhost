@@ -36,12 +36,32 @@ def run_keyframes(bucket: str, input_key: str, output_key: str) -> None:
     )
 
 
+def run_render_pages(bucket: str, input_key: str, output_key: str) -> None:
+    from src.render_pages import run
+
+    index = run(
+        boto3.client("s3"),
+        bucket,
+        input_key,
+        output_key,
+        require("PAGES_PREFIX"),
+    )
+    print(
+        f"rendered {len(index['pages'])} of {index['pageCount']} pages "
+        f"to s3://{bucket}/{output_key}"
+    )
+
+
 def main() -> None:
     bucket = require("INPUT_BUCKET")
     input_key = require("INPUT_KEY")
     output_key = require("OUTPUT_KEY")
-    if os.environ.get("TASK_MODE") == "keyframes":
+    mode = os.environ.get("TASK_MODE")
+    if mode == "keyframes":
         run_keyframes(bucket, input_key, output_key)
+        return
+    if mode == "render-pages":
+        run_render_pages(bucket, input_key, output_key)
         return
     model_name = os.environ.get("WHISPER_MODEL") or "medium"
     language = os.environ.get("LANGUAGE", "auto")

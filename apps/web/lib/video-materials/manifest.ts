@@ -8,15 +8,21 @@ export type MaterialEntry = {
 	uploadedAt: string;
 	uploadedBy: string;
 	textChars: number;
+	/** Absent on materials uploaded before page rendering, which are ready. */
+	status?: MaterialStatus;
+	pageCount?: number;
+	hasImages?: boolean;
 };
+
+export type MaterialStatus = "processing" | "ready" | "failed";
 
 export type MaterialsManifest = { version: 1; materials: MaterialEntry[] };
 
-export const MAX_MATERIALS = 20;
+export const MAX_MATERIALS = 100;
 export const MAX_MATERIAL_BYTES = 25 * 1024 * 1024;
-// Everything uploaded goes into every Q&A request next to the transcript, so
-// the cap keeps the total well inside the context the answer model reads.
-export const MAX_MATERIAL_TEXT_CHARS = 300_000;
+// Past MATERIALS_FULL_TEXT_BUDGET the Q&A model reads materials page by page
+// instead of in full, so this only bounds storage and indexing.
+export const MAX_MATERIAL_TEXT_CHARS = 5_000_000;
 
 export const materialsManifestKey = (ownerId: string, videoId: string) =>
 	`${ownerId}/${videoId}/materials.v1.json`;

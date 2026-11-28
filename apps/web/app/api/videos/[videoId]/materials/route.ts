@@ -2,11 +2,15 @@ import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Video } from "@cap/web-domain";
 import type { NextRequest } from "next/server";
+import { start } from "workflow/api";
+import { queueKnowledgeIndex } from "@/lib/knowledge/queue";
 import {
 	listMaterials,
 	loadMaterialsAccess,
+	uploaderNames,
 	uploadMaterial,
 } from "@/lib/video-materials/materials";
+import { materialProcessingWorkflow } from "@/workflows/material-processing";
 
 export const dynamic = "force-dynamic";
 
@@ -24,15 +28,21 @@ export async function GET(
 		return Response.json({ error: "Video not found." }, { status: 404 });
 	}
 	const materials = await listMaterials(access.bucket, access.video);
+	const names = await uploaderNames(materials);
 	return Response.json(
 		{
 			canManage: access.canManage,
-			materials: materials.map(({ id, name, kind, size, uploadedAt }) => ({
-				id,
-				name,
-				kind,
-				size,
-				uploadedAt,
+			materials: materials.map((material) => ({
+				id: material.id,
+				name: material.name,
+				kind: material.kind,
+				size: material.size,
+				uploadedAt: material.uploadedAt,
+				uploadedBy: names.get(material.uploadedBy) ?? null,
+				textChars: material.textChars,
+				status: material.status ?? "ready",
+				pageCount: material.pageCount ?? null,
+				hasImages: material.hasImages ?? false,
 			})),
 		},
 		{ headers: { "Cache-Control": "no-store" } },
@@ -86,11 +96,25 @@ export async function POST(
 			user.id,
 			file,
 		);
+		if (outcome.ok && outcome.material.status === "processing") {
+			await start(materialProcessingWorkflow, [
+				{ videoId: access.video.id, materialId: outcome.material.id },
+			]).catch((error) =>
+				console.error(
+					`[materials] ${access.video.id}: could not start processing ${outcome.material.id}`,
+					error,
+				),
+			);
+		}
 		results.push(
 			outcome.ok
 				? { name: file.name, ok: true as const, id: outcome.material.id }
 				: { name: file.name, ok: false as const, error: outcome.error },
 		);
+	}
+	// Materials still being processed queue indexing when they finish.
+	if (results.some((result) => result.ok)) {
+		await queueKnowledgeIndex(access.video.id);
 	}
 	const anyFailed = results.some((result) => !result.ok);
 	return Response.json({ results }, { status: anyFailed ? 207 : 201 });

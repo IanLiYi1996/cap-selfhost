@@ -287,16 +287,50 @@ Whisper 日志组里 `wrote N frames (K keyframes)`。
 
 ### 会议材料与问答历史
 
-Ask 标签页顶部的 "Meeting materials":视频所有者和**视频所属组织的成员**可以上传/删除,能看视频的人都能
-下载,问答时材料全文和字幕、画面时间线一起放进缓存块。代码在 `apps/web/lib/video-materials/`、
-`app/api/videos/[videoId]/materials/`。
+分享页右侧的 **Materials** 标签:视频所有者和**视频所属组织的成员**可以上传/删除,能看视频的人都能
+查看和下载。代码在 `apps/web/lib/video-materials/`、`app/api/videos/[videoId]/materials/`、
+`workflows/material-processing.ts`。设计见 `design/superpowers/specs/2026-11-27-meeting-knowledge-design.md`。
 
-- 格式:PDF(`unpdf`,只有文字层,扫描件会被拒)、docx、pptx、xlsx(JSZip 直接读 XML)、html/htm、
-  md、txt、csv、tsv、json。老的 .doc/.ppt 不支持。单个 25 MB,每个视频 20 个、提取后总计 30 万字符。
-- S3:`<owner>/<video>/materials.v1.json`(清单,S3 条件写防并发)、`materials/<id>/<文件名>`(原件)、
-  `materials/<id>/text.txt`(提取文本)。下载一律走 `attachment` 签名 URL——上传的 HTML 绝不能在本域渲染。
-- 问答历史按"视频 × 用户"存在 `<owner>/<video>/ask-history/<userId>.v1.json`,最多 60 条;
-  每答完一次追加,打开 Ask 时载入,"Clear conversation" 删除。别人看不到你的对话。
+- 格式:PDF、docx、pptx、xlsx、html/htm、md、txt、csv、tsv、json。单个 25 MB,每个视频 100 个。
+- **上传时**先同步提取一次文字(`extract.ts`),材料马上可用;PDF/Word/PPT/Excel 随后进入
+  `materialProcessingWorkflow`:
+  1. whisper 任务 `TASK_MODE=render-pages`:LibreOffice 转 PDF(镜像里带 Noto CJK 字体)、PyMuPDF 每页渲染
+     1280px JPEG 并取页文字。最多 500 页。
+  2. Sonnet 5.5 每批 6 页看图写**视觉笔记**(图表数值、表格、流程图、截图)和一句话大纲;没有文字层的页
+     (扫描件)直接转写。最多 300 页。
+  3. 合成逐页内容写 `content.v1.json` 和 `text.txt`,清单状态 `processing` → `ready`(全程无文字为 `failed`)。
+- **问答**:材料总字数 ≤ 15 万时全文进缓存上下文;超过时只放"目录"(每页一行大纲),模型用
+  `search_materials`(知识库混合检索,索引没有时退回本地关键词打分)和 `read_material` 按页读;
+  `look_at_material` 看页面原图。
+- S3(都在 `<owner>/<video>/materials/<id>/` 下):原件、`text.txt`、`pages.v1.json`(渲染索引,最后写)、
+  `pages/NNNN.jpg`、`notes.v1.json`、`content.v1.json`;清单 `<owner>/<video>/materials.v1.json`(条件写)。
+  删除材料会删掉整个目录。下载一律走 `attachment` 签名 URL——上传的 HTML 绝不能在本域渲染。
+- 问答历史按"视频 × 用户"存在 `<owner>/<video>/ask-history/<userId>.v1.json`,最多 60 条。
+- 排查日志:`[materials] <video>/<material>: rendered N of M pages`、`…: ready, N pages, K notes`;
+  whisper 日志组里 `rendered N of M pages`。
+
+## 会议知识库(Dashboard → Knowledge)
+
+跨会议搜索与问答。代码在 `apps/web/lib/knowledge/`、`app/api/knowledge/`、`workflows/knowledge-*.ts`、
+`app/(org)/dashboard/knowledge/`。
+
+- **存储**:S3 Vectors 向量桶 `capstack-knowledge`(CDK 建,只能 IAM 访问),索引 `content-v1` 由应用首次使用
+  时创建(CloudFormation 还不支持全文检索配置):1024 维 cosine,`text` 字段中文全文检索,混合检索。
+  向量桶在 2026-09-30 之后创建,索引默认 ENHANCED(先过滤再检索、支持全文)。
+- **Embedding**:`amazon.nova-2-multimodal-embeddings-v1:0`,文本和图片同一空间——关键帧和材料页图片直接
+  按图片入库,文字问题能搜到图。
+- **入库内容**:字幕(约 800 字 / 90 秒一块)、画面时间线段、关键帧图片、总结与章节、材料每页文字与页面图片。
+  每个会议一份 `<owner>/<video>/knowledge.v1.json` 记录 key → 内容哈希,只重新 embed 变化的块。
+- **触发**:转写完成、AI 总结完成、画面时间线完成、材料处理完成/上传/删除。历史会议:组织 owner/admin 在
+  Knowledge 页面点 "Index existing meetings"(`knowledgeBackfillWorkflow`,按会议逐个跑)。
+- **权限**:查询按当前组织 `orgId` 预过滤,再对每个命中的会议跑分享页同一套 `VideosPolicy.canView`,并排除
+  关闭了字幕的会议。已删除视频的向量在被搜到时清掉。**任何新的检索入口都必须走 `loadViewableMeetings`**。
+- **问答**:Opus 5.5,工具 `search_knowledge` / `read_meeting` / `read_material` / `look_at`,最多 12 步;
+  引用写成 `cap://video/<id>?t=` / `cap://material/<id>/<mid>?page=`,前端转成分享页链接
+  (`?t=` 定位;`?tab=materials&material=&page=` 打开材料对应页)。历史存在
+  `knowledge/<orgId>/history/<userId>.v1.json`。
+- 排查日志:`[knowledge] <video>: N chunks, E embedded, R removed, F failed`、`[knowledge-qa] … steps, usage`。
+- 关掉:去掉 cap-web 的 `KNOWLEDGE_VECTOR_BUCKET`。
 
 ## 实时字幕与翻译(Instant 模式录制)
 

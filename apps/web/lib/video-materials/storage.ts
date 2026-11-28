@@ -1,7 +1,9 @@
 import type { Storage } from "@cap/web-backend";
 import { type Effect, Option } from "effect";
-import { runPromise } from "@/lib/server";
+import { runWorkflowPromise } from "@/lib/workflow-runtime";
 
+// Bucket operations need no services, so the lighter workflow runtime serves
+// both routes and workflow steps.
 export type Bucket = Effect.Effect.Success<
 	ReturnType<typeof Storage.getAccessForVideo>
 >[0];
@@ -44,7 +46,9 @@ export async function updateJsonObject<R>(
 		let raw: string | null;
 		let condition: { ifMatch?: string; ifNoneMatch?: string } = {};
 		if (bucket.provider === "s3") {
-			const existing = await bucket.getObjectWithETag(key).pipe(runPromise);
+			const existing = await bucket
+				.getObjectWithETag(key)
+				.pipe(runWorkflowPromise);
 			raw = Option.isSome(existing) ? existing.value.body : null;
 			condition =
 				Option.isSome(existing) && existing.value.eTag
@@ -65,7 +69,7 @@ export async function updateJsonObject<R>(
 					contentType: "application/json",
 					...condition,
 				})
-				.pipe(runPromise);
+				.pipe(runWorkflowPromise);
 			return outcome.result;
 		} catch (error) {
 			if (attempt >= attempts || !isConditionalWriteConflict(error))
@@ -77,7 +81,7 @@ export async function updateJsonObject<R>(
 export async function readText(bucket: Bucket, key: string) {
 	const object = await bucket
 		.getObject(key)
-		.pipe(runPromise)
+		.pipe(runWorkflowPromise)
 		.catch(() => Option.none<string>());
 	return Option.isSome(object) ? object.value : null;
 }

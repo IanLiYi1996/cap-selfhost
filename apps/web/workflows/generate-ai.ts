@@ -16,6 +16,7 @@ import { FatalError } from "workflow";
 import { isAiConfigured } from "@/lib/ai/provider";
 import { AiUnavailableError, runWithAiProviders } from "@/lib/ai/run";
 import { setGeneratedAiContent } from "@/lib/ai-content-metadata";
+import { queueKnowledgeIndex } from "@/lib/knowledge/queue";
 import { enqueueVideoStorageNameSync } from "@/lib/sync-video-storage-names";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { runWorkflowPromise } from "@/lib/workflow-runtime";
@@ -120,6 +121,7 @@ export async function generateAiWorkflow(payload: GenerateAiWorkflowPayload) {
 		);
 
 		await saveResults(videoId, videoData, result);
+		await queueKnowledge(videoId);
 	} catch (error) {
 		await markError(videoId);
 		throw error;
@@ -840,4 +842,10 @@ export function parseAiResponse(content: string): AiResult {
 		summary: data.summary.trim(),
 		chapters,
 	};
+}
+
+async function queueKnowledge(videoId: string): Promise<void> {
+	"use step";
+
+	await queueKnowledgeIndex(videoId);
 }

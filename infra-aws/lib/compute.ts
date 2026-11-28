@@ -126,6 +126,26 @@ export class Compute extends Construct {
 			}),
 		);
 
+		// The knowledge index: the app creates its index on first use, then reads
+		// and writes vectors in it.
+		this.taskRole.addToPolicy(
+			new iam.PolicyStatement({
+				actions: [
+					"s3vectors:GetIndex",
+					"s3vectors:CreateIndex",
+					"s3vectors:PutVectors",
+					"s3vectors:GetVectors",
+					"s3vectors:QueryVectors",
+					"s3vectors:DeleteVectors",
+					"s3vectors:ListVectors",
+				],
+				resources: [
+					props.storage.vectorBucketArn,
+					`${props.storage.vectorBucketArn}/index/*`,
+				],
+			}),
+		);
+
 		const webSecurityGroup = new ec2.SecurityGroup(this, "WebSg", {
 			vpc: props.vpc,
 			allowAllOutbound: true,
@@ -193,6 +213,7 @@ export class Compute extends Construct {
 				LIVE_TRANSCRIBE_RUNNER: "media-server",
 				LIVE_TRANSCRIBE_ASR: "aws-transcribe",
 				LIVE_TRANSLATE_BACKEND: "aws-translate",
+				KNOWLEDGE_VECTOR_BUCKET: props.storage.vectorBucketName,
 				AI_PROVIDER: "bedrock",
 				BEDROCK_REGION: cdk.Stack.of(this).region,
 			},

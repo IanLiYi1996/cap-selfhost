@@ -18,7 +18,8 @@
 | **Amazon Transcribe 转写** | 中英自动识别、说话人识别、完整标点;1 小时 45 分钟的录制约 9 分钟出字幕。自建 Whisper 作回退 |
 | **Claude 总结与章节** | Amazon Bedrock 上的 Claude Sonnet 5.5 生成标题、总结和章节 |
 | **视频问答(Ask 标签页)** | Claude Opus 5.5 基于**完整字幕 + 画面时间线 + 会议材料**回答,每个结论带可点击的 `[mm:ss]`;需要看清画面细节时自己调用 `look_at` 查看关键帧;每人的对话按视频保存,下次打开接着问 |
-| **会议材料** | 视频所有者和组织成员可给每个录屏上传 PDF、Word、PowerPoint、Excel、HTML、Markdown 等材料,长期保存,问答时与录屏内容一起引用(《文件名》[第 N 页]) |
+| **会议材料** | 每个录屏一个 Materials 标签:上传 PDF、Word、PowerPoint、Excel、HTML、Markdown 等,长期保存;每页渲染成图片,模型为图表、表格、截图写视觉笔记,扫描件也能读;问答时与录屏一起引用(《文件名》[第 N 页]),材料很多时按目录检索、按页阅读、看原图 |
+| **会议知识库** | Dashboard → Knowledge:用 S3 Vectors + Nova 2 多模态 embedding 索引所有会议的字幕、画面、关键帧、总结和材料页,混合检索;跨会议问答带可跳转的出处,权限与看视频完全一致 |
 | **实时字幕与翻译** | 桌面端 Instant 模式录制时,media-server 用 Amazon Transcribe Streaming 边录边出字幕(约 6–10 秒延迟);观看者可选语言,用 Amazon Translate 实时翻译 |
 | **画面时间线** | 按画面变化抽关键帧,Sonnet 5.5 逐段描述画面并**原样照抄屏幕文字**(幻灯片、代码、报错、界面数值),让问答也能回答"屏幕上显示了什么" |
 | **必须登录才能观看** | 整个实例只对登录用户开放,包括设成"公开"的视频;链接预览、oEmbed、公开合集也一并关闭 |
@@ -96,7 +97,8 @@ git clone https://github.com/IanLiYi1996/cap-selfhost.git && cd cap-selfhost
 | `apps/web/lib/aws-transcribe.ts` | Amazon Transcribe 转写后端 |
 | `apps/web/lib/video-qa/` · `apps/web/workflows/visual-timeline.ts` | 视频问答与画面时间线 |
 | `apps/web/app/api/videos/[videoId]/ask/` · `apps/web/app/s/[videoId]/_components/tabs/Ask.tsx` | 问答接口和 Ask 标签页 |
-| `apps/web/lib/video-materials/` · `apps/web/app/api/videos/[videoId]/materials/` | 会议材料的上传、文本提取与存储 |
+| `apps/web/lib/video-materials/` · `apps/web/workflows/material-processing.ts` | 会议材料:上传、逐页渲染与视觉笔记、分层问答 |
+| `apps/web/lib/knowledge/` · `apps/web/app/(org)/dashboard/knowledge/` | 会议知识库:S3 Vectors 索引、搜索、跨会议问答 |
 | `apps/media-server/src/lib/live-transcribe-stream.ts` · `apps/web/lib/live-translate*.ts` | 实时字幕(Transcribe Streaming)与实时翻译(Translate) |
 | `apps/web/lib/sign-in-required.ts` | 实例级"必须登录才能观看" |
 

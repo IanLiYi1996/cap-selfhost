@@ -54,6 +54,15 @@ for name in sorted(os.listdir(target)):
     assert size > 1_000_000, f"{name} looks truncated"
 PY
 
+# Meeting materials: LibreOffice turns Office files into PDF for page
+# rendering, and the CJK fonts keep Chinese slides from rendering as boxes.
+# After the model layers so adding it does not re-download the weights.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		libreoffice-writer-nogui libreoffice-impress-nogui libreoffice-calc-nogui \
+		fonts-noto-cjk fonts-dejavu-core \
+	&& rm -rf /var/lib/apt/lists/*
+
 COPY src ./src
 
 CMD ["python", "-m", "src.main"]

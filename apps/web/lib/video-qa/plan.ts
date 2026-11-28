@@ -70,7 +70,7 @@ export function pickLookAtFrames(
 	return fallback ? [fallback] : [];
 }
 
-function extractJsonObject(text: string): unknown {
+export function extractJsonObject(text: string): unknown {
 	const unfenced = text.replace(/```(?:json)?/gi, "");
 	const first = unfenced.indexOf("{");
 	const last = unfenced.lastIndexOf("}");

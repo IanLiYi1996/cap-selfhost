@@ -2,6 +2,7 @@ import * as cdk from "aws-cdk-lib";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3vectors from "aws-cdk-lib/aws-s3vectors";
 import { Construct } from "constructs";
 
 export interface StorageProps {
@@ -24,11 +25,23 @@ function requireSigningPublicKey(): string {
 
 export class Storage extends Construct {
 	readonly bucket: s3.Bucket;
+	/** The meeting knowledge index (cross-meeting search). Like every S3
+	 * Vectors bucket it has no public access; only IAM principals reach it. */
+	readonly vectorBucketName: string;
+	readonly vectorBucketArn: string;
 	readonly distribution: cloudfront.Distribution;
 	readonly keyPairId: string;
 
 	constructor(scope: Construct, id: string, props: StorageProps) {
 		super(scope, id);
+
+		this.vectorBucketName = `${cdk.Stack.of(this).stackName.toLowerCase()}-knowledge`;
+		const vectorBucket = new s3vectors.CfnVectorBucket(this, "Knowledge", {
+			vectorBucketName: this.vectorBucketName,
+			encryptionConfiguration: { sseType: "AES256" },
+		});
+		vectorBucket.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+		this.vectorBucketArn = vectorBucket.attrVectorBucketArn;
 
 		this.bucket = new s3.Bucket(this, "Recordings", {
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,

@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { Option } from "effect";
 import { getAiModel } from "@/lib/ai/provider";
 import { runWithAiProviders } from "@/lib/ai/run";
+import { queueKnowledgeIndex } from "@/lib/knowledge/queue";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
 import {
 	framesIndexKey,
@@ -249,6 +250,7 @@ async function saveTimeline(
 	console.log(
 		`[visual-timeline] ${videoId}: saved ${segments.length} segments`,
 	);
+	await queueKnowledgeIndex(videoId);
 }
 
 async function releaseLock(videoId: string, userId: string): Promise<void> {

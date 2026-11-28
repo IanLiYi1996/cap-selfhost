@@ -47,6 +47,7 @@ import {
 } from "@/lib/edit-transcript";
 import { encryptEditTranscriptObject } from "@/lib/edit-transcript-storage";
 import { startAiGeneration } from "@/lib/generate-ai";
+import { queueKnowledgeIndex } from "@/lib/knowledge/queue";
 import { getLiveTranscriptObjectKey } from "@/lib/live-transcribe-core";
 import {
 	checkHasAudioTrackViaMediaServer,
@@ -231,6 +232,7 @@ export async function transcribeVideoWorkflow(
 		await queueAiGeneration(videoId, userId);
 		await queueVisualTimeline(videoId);
 	}
+	await queueKnowledge(videoId);
 
 	return { success: true, message: "Transcription completed successfully" };
 }
@@ -1278,6 +1280,12 @@ async function queueAiGeneration(
 	"use step";
 
 	await startAiGeneration(videoId as Video.VideoId, userId);
+}
+
+async function queueKnowledge(videoId: string): Promise<void> {
+	"use step";
+
+	await queueKnowledgeIndex(videoId);
 }
 
 async function queueVisualTimeline(videoId: string): Promise<void> {

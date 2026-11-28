@@ -12,6 +12,7 @@ dependencies = [
 	# that pip rejects for the one unhashed package. Works locally, fails on a
 	# clean install.
 	"sherpa-onnx-core>=1.13.6",
+	"pymupdf>=1.26",
 ]
 
 [project.optional-dependencies]

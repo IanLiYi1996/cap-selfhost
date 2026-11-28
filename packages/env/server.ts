@@ -298,6 +298,12 @@ function createServerEnv() {
 				.describe(
 					"Comma-separated Amazon Transcribe language codes to identify between, eg. zh-CN,en-US",
 				),
+			KNOWLEDGE_VECTOR_BUCKET: z
+				.string()
+				.optional()
+				.describe(
+					"S3 Vectors bucket for the meeting knowledge index (cross-meeting search and Q&A); unset turns the index off",
+				),
 			LIVE_TRANSLATE_BACKEND: z
 				.enum(["aws-translate"])
 				.optional()

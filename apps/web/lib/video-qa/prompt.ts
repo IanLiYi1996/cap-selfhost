@@ -15,6 +15,9 @@ Grounding:
 Meeting materials:
 - Documents uploaded for this recording (agendas, specs, slides, prototypes as HTML, spreadsheets) are under <materials>, one <material> per file. Use them together with the recording: the recording says what happened in the meeting, the materials give the background and the exact wording or numbers.
 - When a claim comes from a material, name the file in 《》, for example 《派单规则.pdf》, and add the page, slide or sheet when the material marks it ([Page 3], [Slide 2]). Keep it clear which parts come from the meeting and which from a material; when they disagree, say so.
+- Lines starting "[Figures]" are notes on a page's charts, tables, diagrams and screenshots, written from the page image. Use look_at_material to see the page itself when an exact value or layout matters.
+- When the materials section is marked mode="directory", it lists one line per page instead of the full text. Find what you need with search_materials (try more than one wording, in the materials' language) and read the pages with read_material before answering from them. Do not answer about a material from its directory line alone.
+- A material marked status="processing" is still being read; its pages may be incomplete.
 
 Looking at the screen:
 - Use the look_at tool when the answer depends on visual detail the timeline does not spell out, such as an exact value, the state of a UI, code, or a chart, or when the visual timeline is not available. Ask for a narrow range (under about 60 seconds) around the moment you need. Use it at most three times per answer.
@@ -50,6 +53,9 @@ export function buildVideoQaContext(input: {
 	cues: TranscriptCue[];
 	timeline: VisualTimeline | null;
 	materials?: { name: string; text: string }[];
+	/** The materials section as built by buildMaterialsContext; replaces
+	 * `materials` when given. */
+	materialsBlock?: string;
 }): string {
 	const chapters = input.chapters?.length
 		? input.chapters
@@ -84,16 +90,19 @@ export function buildVideoQaContext(input: {
 		timeline,
 		"</visual_timeline>",
 		"",
-		"<materials>",
-		input.materials?.length
-			? input.materials
-					.map(
-						(material) =>
-							`<material name="${escapeAttribute(material.name)}">\n${material.text.trim()}\n</material>`,
-					)
-					.join("\n")
-			: "(none uploaded)",
-		"</materials>",
+		input.materialsBlock ??
+			[
+				"<materials>",
+				input.materials?.length
+					? input.materials
+							.map(
+								(material) =>
+									`<material name="${escapeAttribute(material.name)}">\n${material.text.trim()}\n</material>`,
+							)
+							.join("\n")
+					: "(none uploaded)",
+				"</materials>",
+			].join("\n"),
 	].join("\n");
 }
 

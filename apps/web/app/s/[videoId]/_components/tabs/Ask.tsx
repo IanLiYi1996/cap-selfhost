@@ -85,9 +85,11 @@ function Answer({
 export function Ask({
 	data,
 	onSeek,
+	onOpenMaterials,
 }: {
 	data: VideoData;
 	onSeek?: (time: number) => void;
+	onOpenMaterials?: () => void;
 }) {
 	const user = useCurrentUser();
 	const { data: status } = useQuery({
@@ -250,20 +252,23 @@ export function Ask({
 
 	if (!transcriptReady) {
 		return (
-			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
-				<h3 className="text-base font-medium text-gray-12">
-					Ask about this video
-				</h3>
-				<p className="mt-1 text-sm text-gray-10">
-					Questions open up once the transcript is ready.
-				</p>
+			<div className="flex flex-col h-full">
+				<AskMaterials videoId={data.id} onOpenMaterials={onOpenMaterials} />
+				<div className="flex flex-col flex-1 justify-center items-center p-8 text-center">
+					<h3 className="text-base font-medium text-gray-12">
+						Ask about this video
+					</h3>
+					<p className="mt-1 text-sm text-gray-10">
+						Questions open up once the transcript is ready.
+					</p>
+				</div>
 			</div>
 		);
 	}
 
 	return (
 		<div className="flex flex-col h-full">
-			<AskMaterials videoId={data.id} />
+			<AskMaterials videoId={data.id} onOpenMaterials={onOpenMaterials} />
 			<div ref={scrollRef} className="overflow-y-auto flex-1 p-4 space-y-4">
 				{turns.length === 0 ? (
 					<div className="space-y-3">

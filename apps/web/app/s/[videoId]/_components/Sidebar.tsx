@@ -4,6 +4,7 @@ import type { ImageUpload, Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "motion/react";
 import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
 import { forwardRef, Suspense, useState } from "react";
 import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { useCurrentUser } from "@/app/Layout/AuthContext";
@@ -19,9 +20,11 @@ import type { SummaryEditingState } from "./tabs/SummaryEditor";
 const importSummary = () => import("./tabs/Summary");
 const importTranscript = () => import("./tabs/Transcript");
 const importAsk = () => import("./tabs/Ask");
+const importMaterials = () => import("./tabs/Materials");
 const Summary = dynamic(() => importSummary().then((m) => m.Summary));
 const Transcript = dynamic(() => importTranscript().then((m) => m.Transcript));
 const Ask = dynamic(() => importAsk().then((m) => m.Ask));
+const Materials = dynamic(() => importMaterials().then((m) => m.Materials));
 const Settings = dynamic(() =>
 	import("./tabs/Settings").then((m) => m.Settings),
 );
@@ -30,9 +33,16 @@ const prefetchTab = (tabId: string) => {
 	if (tabId === "summary") void importSummary();
 	else if (tabId === "transcript") void importTranscript();
 	else if (tabId === "ask") void importAsk();
+	else if (tabId === "materials") void importMaterials();
 };
 
-type TabType = "activity" | "transcript" | "summary" | "ask" | "settings";
+type TabType =
+	| "activity"
+	| "transcript"
+	| "summary"
+	| "ask"
+	| "materials"
+	| "settings";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
 	authorName?: string | null;
@@ -156,7 +166,18 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			(summaryEditingState !== "dirty" ||
 				window.confirm("Discard your unsaved summary and chapter changes?"));
 
-		const [activeTab, setActiveTab] = useState<TabType>(defaultTab);
+		// Links from knowledge search open a material at a page.
+		const searchParams = useSearchParams();
+		const linkedMaterial =
+			searchParams.get("tab") === "materials"
+				? (searchParams.get("material") ?? undefined)
+				: undefined;
+		const linkedPage = Number(searchParams.get("page")) || undefined;
+		const [activeTab, setActiveTab] = useState<TabType>(
+			searchParams.get("tab") === "materials" && !isScreenshot
+				? "materials"
+				: defaultTab,
+		);
 		const [[page, direction], setPage] = useState([0, 0]);
 
 		const tabs = [
@@ -191,6 +212,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								(videoSettings?.disableTranscript ??
 									data.orgSettings?.disableTranscript),
 						},
+						{ id: "materials", label: "Materials", disabled: false },
 					]),
 		];
 
@@ -255,7 +277,21 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 				case "transcript":
 					return <Transcript data={data} onSeek={onSeek} />;
 				case "ask":
-					return <Ask data={data} onSeek={onSeek} />;
+					return (
+						<Ask
+							data={data}
+							onSeek={onSeek}
+							onOpenMaterials={() => paginate("materials")}
+						/>
+					);
+				case "materials":
+					return (
+						<Materials
+							videoId={data.id}
+							initialMaterialId={linkedMaterial}
+							initialPage={linkedPage}
+						/>
+					);
 				case "settings":
 					return <Settings />;
 				default:

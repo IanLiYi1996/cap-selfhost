@@ -3,8 +3,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import type { Video } from "@cap/web-domain";
 import { stepCountIs, streamText } from "ai";
 import type { NextRequest } from "next/server";
+import { createRateLimiter } from "@/lib/ai/memory-rate-limit";
 import { isAiConfigured } from "@/lib/ai/provider";
-import { runWithAiProviders } from "@/lib/ai/run";
+import { streamAnswer } from "@/lib/ai/stream-answer";
+import { materialSearchFor } from "@/lib/knowledge/material-search";
 import { updateJsonObject } from "@/lib/video-materials/storage";
 import {
 	createLookAtTool,
@@ -12,34 +14,17 @@ import {
 	parseAskRequest,
 } from "@/lib/video-qa/ask";
 import { appendHistory, askHistoryKey } from "@/lib/video-qa/history";
+import { createMaterialTools } from "@/lib/video-qa/material-tools";
 
 export const dynamic = "force-dynamic";
 
-const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_REQUESTS = 12;
 const ANSWER_TIMEOUT_MS = 4 * 60 * 1000;
 const ANSWER_MAX_OUTPUT_TOKENS = 8000;
-const MAX_STEPS = 5;
+// Reading materials page by page takes a search, a read or two and maybe a
+// look at a page before the answer.
+const MAX_STEPS = 8;
 
-const requestLog = new Map<string, number[]>();
-
-function isRateLimited(key: string): boolean {
-	const now = Date.now();
-	const recent = (requestLog.get(key) ?? []).filter(
-		(timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS,
-	);
-	const limited = recent.length >= RATE_LIMIT_MAX_REQUESTS;
-	if (!limited) recent.push(now);
-	requestLog.set(key, recent);
-	if (requestLog.size > 5000) {
-		for (const [entryKey, timestamps] of requestLog) {
-			if (timestamps.every((ts) => now - ts >= RATE_LIMIT_WINDOW_MS)) {
-				requestLog.delete(entryKey);
-			}
-		}
-	}
-	return limited;
-}
+const isRateLimited = createRateLimiter(60_000, 12);
 
 const STATUS_ERRORS = {
 	not_found: { status: 404, error: "Video not found." },
@@ -54,10 +39,6 @@ const STATUS_ERRORS = {
 			"This recording and its materials are too long to answer questions about. Remove a large material and try again.",
 	},
 } as const;
-
-function toStreamError(error: unknown): Error {
-	return error instanceof Error ? error : new Error(String(error));
-}
 
 export async function POST(
 	request: NextRequest,
@@ -106,71 +87,23 @@ export async function POST(
 		return Response.json({ error }, { status });
 	}
 
-	const tools = context.framesIndex?.frames.length
-		? { look_at: createLookAtTool(context.bucket, context.framesIndex) }
-		: undefined;
+	const materialTools = createMaterialTools({
+		bucket: context.bucket,
+		materials: context.materials,
+		context: context.materialsContext,
+		search: materialSearchFor(context.video.id),
+	});
+	const allTools = {
+		...(context.framesIndex?.frames.length
+			? { look_at: createLookAtTool(context.bucket, context.framesIndex) }
+			: {}),
+		...materialTools,
+	};
+	const tools = Object.keys(allTools).length > 0 ? allTools : undefined;
 	const abortSignal = AbortSignal.any([
 		request.signal,
 		AbortSignal.timeout(ANSWER_TIMEOUT_MS),
 	]);
-
-	const upstream = await runWithAiProviders("chat-streaming", (selection) => {
-		const result = streamText({
-			model: selection.model(),
-			instructions: context.instructions,
-			messages: [...parsed.history, { role: "user", content: parsed.question }],
-			maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
-			abortSignal,
-			...(tools
-				? {
-						tools,
-						stopWhen: stepCountIs(MAX_STEPS),
-						...(selection.providerOptions
-							? { providerOptions: selection.providerOptions }
-							: {}),
-					}
-				: {}),
-			onFinish: ({ totalUsage, steps }) => {
-				console.log(
-					`[video-qa] ${videoId} ${selection.modelId}: ${steps.length} steps, usage ${JSON.stringify(totalUsage)}`,
-				);
-			},
-		});
-
-		const reader = result.fullStream.getReader();
-		const buffered: string[] = [];
-
-		// Read ahead to the first text delta (past any look_at round trips) so
-		// a provider that fails before answering falls through to the next one
-		// before any bytes reach the client.
-		const readAhead = async () => {
-			while (buffered.length === 0) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				if (value.type === "error") throw toStreamError(value.error);
-				if (value.type === "abort")
-					throw new Error(value.reason ?? "video-qa stream aborted");
-				if (value.type === "text-delta" && value.text)
-					buffered.push(value.text);
-			}
-			if (buffered.length === 0) {
-				throw new Error("video-qa stream produced no text");
-			}
-			return { reader, buffered };
-		};
-
-		return readAhead();
-	}).catch((error) => {
-		console.error(`[video-qa] ${videoId} upstream error`, error);
-		return null;
-	});
-
-	if (!upstream) {
-		return Response.json(
-			{ error: "Q&A is having trouble right now. Try again shortly." },
-			{ status: 502 },
-		);
-	}
 
 	const historyKey = askHistoryKey(context.video.ownerId, videoId, user.id);
 	const saveTurn = (answer: string) =>
@@ -183,42 +116,42 @@ export async function POST(
 			console.error(`[video-qa] ${videoId}: could not save history`, error);
 		});
 
-	const encoder = new TextEncoder();
-	let answer = "";
-	const stream = new ReadableStream<Uint8Array>({
-		start(controller) {
-			for (const text of upstream.buffered) {
-				answer += text;
-				controller.enqueue(encoder.encode(text));
-			}
-			const pump = (): Promise<void> =>
-				upstream.reader.read().then(async ({ done, value }) => {
-					if (done) {
-						if (answer.trim()) await saveTurn(answer);
-						controller.close();
-						return;
-					}
-					if (value.type === "error") throw toStreamError(value.error);
-					if (value.type === "abort")
-						throw new Error(value.reason ?? "video-qa stream aborted");
-					if (value.type === "text-delta" && value.text) {
-						answer += value.text;
-						controller.enqueue(encoder.encode(value.text));
-					}
-					return pump();
-				});
-			return pump().catch((error) => controller.error(error));
-		},
-		cancel(reason) {
-			upstream.reader.cancel(reason).catch(() => undefined);
-		},
+	const response = await streamAnswer({
+		label: "video-qa",
+		run: (selection) =>
+			streamText({
+				model: selection.model(),
+				instructions: context.instructions,
+				messages: [
+					...parsed.history,
+					{ role: "user", content: parsed.question },
+				],
+				maxOutputTokens: ANSWER_MAX_OUTPUT_TOKENS,
+				abortSignal,
+				...(tools
+					? {
+							tools,
+							stopWhen: stepCountIs(MAX_STEPS),
+							...(selection.providerOptions
+								? { providerOptions: selection.providerOptions }
+								: {}),
+						}
+					: {}),
+				onFinish: ({ totalUsage, steps }) => {
+					console.log(
+						`[video-qa] ${videoId} ${selection.modelId}: ${steps.length} steps, usage ${JSON.stringify(totalUsage)}`,
+					);
+				},
+			}),
+		onDone: saveTurn,
+		headers: { "X-Visual-Timeline": context.timelineState },
 	});
 
-	return new Response(stream, {
-		headers: {
-			"Content-Type": "text/plain; charset=utf-8",
-			"Cache-Control": "no-store",
-			"X-Visual-Timeline": context.timelineState,
-		},
-	});
+	return (
+		response ??
+		Response.json(
+			{ error: "Q&A is having trouble right now. Try again shortly." },
+			{ status: 502 },
+		)
+	);
 }

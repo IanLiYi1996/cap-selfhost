@@ -34,6 +34,38 @@ describe("Compute", () => {
 		expect(dependsOn).toContain(id("ComputeMediaService"));
 	});
 
+	it("知识库向量桶只授权给任务角色，且限定在该向量桶内", () => {
+		template.resourceCountIs("AWS::S3Vectors::VectorBucket", 1);
+		const statements = Object.values(
+			template.findResources("AWS::IAM::Policy"),
+		).flatMap(
+			(policy) =>
+				(policy.Properties.PolicyDocument.Statement ?? []) as {
+					Action: string | string[];
+					Resource: unknown;
+				}[],
+		);
+		const vectorStatements = statements.filter((statement) =>
+			[statement.Action]
+				.flat()
+				.some((action) => action.startsWith("s3vectors:")),
+		);
+		expect(vectorStatements).toHaveLength(1);
+		const resources = [vectorStatements[0]?.Resource].flat();
+		expect(resources).not.toContain("*");
+		expect(resources).toHaveLength(2);
+		const env = taskDefs()
+			.flatMap(
+				(def) =>
+					def.Properties.ContainerDefinitions[0].Environment as {
+						Name: string;
+						Value: unknown;
+					}[],
+			)
+			.find((entry) => entry.Name === "KNOWLEDGE_VECTOR_BUCKET");
+		expect(env?.Value).toBe("teststack-knowledge");
+	});
+
 	it("S3_PATH_STYLE 为 false（默认 true 是给 MinIO 的）", () => {
 		const env = taskDefs()
 			.flatMap(

@@ -59,6 +59,7 @@ import {
 	CodeIcon,
 	CogIcon,
 	ImportIcon,
+	LayersIcon,
 	RecordIcon,
 } from "../AnimatedIcons";
 import type { CogIconHandle } from "../AnimatedIcons/Cog";
@@ -94,6 +95,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 			href: `/dashboard/analytics`,
 			matchChildren: true,
 			icon: <ChartLineIcon />,
+			subNav: [],
+		},
+		{
+			name: "Knowledge",
+			href: `/dashboard/knowledge`,
+			icon: <LayersIcon />,
 			subNav: [],
 		},
 		{

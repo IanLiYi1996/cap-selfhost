@@ -2,6 +2,7 @@ import { isCrossSiteCookieWrite } from "@cap/database/auth/request-site";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Video } from "@cap/web-domain";
 import type { NextRequest } from "next/server";
+import { queueKnowledgeIndex } from "@/lib/knowledge/queue";
 import {
 	deleteMaterial,
 	loadMaterialsAccess,
@@ -57,6 +58,7 @@ export async function DELETE(request: NextRequest, props: Props) {
 		);
 	}
 	const removed = await deleteMaterial(access.bucket, access.video, materialId);
+	if (removed) await queueKnowledgeIndex(access.video.id);
 	return removed
 		? Response.json({ ok: true })
 		: Response.json({ error: "Material not found." }, { status: 404 });

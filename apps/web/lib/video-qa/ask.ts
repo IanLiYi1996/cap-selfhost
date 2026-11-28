@@ -15,7 +15,12 @@ import { z } from "zod";
 import { formatPlayerTime } from "@/lib/player-time";
 import { runPromise } from "@/lib/server";
 import { fetchStorageUrl } from "@/lib/storage-fetch";
-import { loadMaterialTexts } from "@/lib/video-materials/materials";
+import {
+	buildMaterialsContext,
+	type LoadedMaterial,
+	type MaterialsContext,
+} from "@/lib/video-materials/context";
+import { loadMaterials } from "@/lib/video-materials/materials";
 import { decodeStorageVideo } from "@/lib/video-storage";
 import { loadViewableVideo } from "./access";
 import {
@@ -50,11 +55,13 @@ export type AskContext =
 			instructions: SystemModelMessage[];
 			framesIndex: FramesIndex | null;
 			bucket: Bucket;
+			materials: LoadedMaterial[];
+			materialsContext: MaterialsContext;
 			timelineState: VisualTimelineState;
 	  }
 	| { status: "not_found" | "disabled" | "not_ready" | "too_long" };
 
-async function effectiveSettings(video: VideoRow) {
+export async function effectiveSettings(video: VideoRow) {
 	const [[organization], sharedSpaces] = await Promise.all([
 		db()
 			.select({ settings: organizations.settings })
@@ -109,7 +116,7 @@ export async function loadAskContext(
 		readText(bucket, `${userId}/${videoId}/transcription.vtt`),
 		readText(bucket, visualTimelineKey(userId, videoId)),
 		readText(bucket, framesIndexKey(userId, videoId)),
-		loadMaterialTexts(bucket, video),
+		loadMaterials(bucket, video),
 	]);
 	if (!vtt) return { status: "not_ready" };
 
@@ -117,6 +124,7 @@ export async function loadAskContext(
 	const framesIndex = framesRaw ? parseFramesIndex(framesRaw) : null;
 	const metadata = (video.metadata as VideoMetadata | null) ?? {};
 	const cues = parseVttCues(vtt);
+	const materialsContext = buildMaterialsContext(materials);
 
 	const context = buildVideoQaContext({
 		title: metadata.aiTitle || video.name,
@@ -125,7 +133,7 @@ export async function loadAskContext(
 		chapters: settings.disableChapters ? null : metadata.chapters,
 		cues,
 		timeline,
-		materials,
+		materialsBlock: materialsContext.block,
 	});
 	if (context.length > MAX_CONTEXT_CHARS) return { status: "too_long" };
 
@@ -141,6 +149,8 @@ export async function loadAskContext(
 		video,
 		bucket,
 		framesIndex,
+		materials,
+		materialsContext,
 		timelineState,
 		instructions: [
 			{ role: "system", content: VIDEO_QA_INSTRUCTIONS },
